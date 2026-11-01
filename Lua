@@ -331,8 +331,10 @@ task.spawn(function()
     end)
 end)
 
+-- ==========================================================
 -- Skin backend (client side: only you can see these changes)
-local Skin = {Active = {}, Saved = {}, Conns = {}, Mats = {}}
+-- ==========================================================
+local Skin = {Active = {}, Saved = {}, Conns = {}, Mats = {}, Recent = {}}
 Library.Skin = Skin
 
 local function myHum()
@@ -370,10 +372,94 @@ local function editDesc(mut)
     end))
 end
 
-function Skin.Apply(desc)
+-- compares the important outfit fields (only the ones the target really sets)
+local OutfitFields = {"Shirt", "Pants", "GraphicTShirt", "Head", "Torso", "LeftArm", "RightArm", "LeftLeg", "RightLeg", "Face"}
+local function sameOutfit(target, now)
+    for _, f in ipairs(OutfitFields) do
+        local a, b
+        pcall(function() a, b = target[f], now[f] end)
+        if a ~= nil and a ~= 0 and a ~= b then return false end
+    end
+    return true
+end
+
+-- fallback: copies clothes, accessories, face and body meshes by hand from a rig built out of the description
+function Skin.Manual(desc)
+    local c, h = LP.Character, myHum()
+    if not c or not h then return false end
+    local okR, rig = pcall(function() return Players:CreateHumanoidModelFromDescription(desc, h.RigType) end)
+    if not okR or not rig then return false end
+    pcall(function()
+        for _, d in ipairs(c:GetChildren()) do
+            if d:IsA("Accessory") or d:IsA("Shirt") or d:IsA("Pants") or d:IsA("ShirtGraphic") or d:IsA("BodyColors") or d:IsA("CharacterMesh") then
+                d:Destroy()
+            end
+        end
+        for _, d in ipairs(rig:GetChildren()) do
+            if d:IsA("Accessory") then
+                pcall(function() h:AddAccessory(d:Clone()) end)
+            elseif d:IsA("Shirt") or d:IsA("Pants") or d:IsA("ShirtGraphic") or d:IsA("BodyColors") or d:IsA("CharacterMesh") then
+                d:Clone().Parent = c
+            end
+        end
+        for _, p in ipairs(rig:GetChildren()) do
+            local mine = c:FindFirstChild(p.Name)
+            if mine and p:IsA("MeshPart") and mine:IsA("MeshPart") then
+                pcall(function() mine.MeshId = p.MeshId end)
+                pcall(function() mine.TextureID = p.TextureID end)
+            end
+        end
+        local rh, mh = rig:FindFirstChild("Head"), c:FindFirstChild("Head")
+        if rh and mh then
+            local rf, mf = rh:FindFirstChildOfClass("Decal"), mh:FindFirstChildOfClass("Decal")
+            if rf then
+                if mf then mf.Texture = rf.Texture else rf:Clone().Parent = mh end
+            end
+            local rm, mm = rh:FindFirstChildOfClass("SpecialMesh"), mh:FindFirstChildOfClass("SpecialMesh")
+            if rm and mm then
+                pcall(function() mm.MeshId = rm.MeshId mm.TextureId = rm.TextureId end)
+            end
+        end
+    end)
+    pcall(function() rig:Destroy() end)
+    return true
+end
+
+-- applies a HumanoidDescription to your own character. Yields, so call it inside task.spawn.
+-- 1) ApplyDescriptionReset  2) ApplyDescription  3) manual copy. Every step is checked, nothing throws.
+function Skin.Apply(desc, noHistory)
     local h = myHum()
-    if not h then return false end
-    return (pcall(function() h:ApplyDescription(desc) end))
+    if not h or not desc then return false end
+    if not noHistory then
+        pcall(function() Skin.Prev = h:GetAppliedDescription() end)
+    end
+    Skin.LastDesc = desc
+    local ok = false
+    for attempt = 1, 3 do
+        h = myHum()
+        if not h then break end
+        local good = pcall(function()
+            if attempt == 1 then h:ApplyDescriptionReset(desc) else h:ApplyDescription(desc) end
+        end)
+        if good then
+            task.wait(0.25)
+            local okV, now = pcall(function() return h:GetAppliedDescription() end)
+            if okV and now and sameOutfit(desc, now) then ok = true break end
+        end
+        task.wait(0.3)
+    end
+    if not ok then ok = Skin.Manual(desc) end
+    return ok
+end
+
+function Skin.AddRecent(id, name)
+    local entry = tostring(name) .. " | " .. tostring(id)
+    for i = #Skin.Recent, 1, -1 do
+        if tostring(Skin.Recent[i]):match("| (%d+)$") == tostring(id) then table.remove(Skin.Recent, i) end
+    end
+    table.insert(Skin.Recent, 1, entry)
+    while #Skin.Recent > 10 do table.remove(Skin.Recent) end
+    if Skin.OnRecent then pcall(Skin.OnRecent) end
 end
 
 Skin.Effects = {}
@@ -566,6 +652,29 @@ function Skin.SetColor(col)
     bc.RightArmColor3 = col
     bc.LeftLegColor3 = col
     bc.RightLegColor3 = col
+end
+
+-- what the config manager saves / restores for the skin page
+function Skin.Export()
+    return {Id = Skin.LastId, Color = Skin.Color and Skin.Color:ToHex() or nil, Recent = Skin.Recent}
+end
+
+function Skin.Import(t)
+    if type(t) ~= "table" then return end
+    if type(t.Recent) == "table" then
+        Skin.Recent = t.Recent
+        if Skin.OnRecent then pcall(Skin.OnRecent) end
+    end
+    local col
+    if t.Color then
+        local ok, c3 = pcall(Color3.fromHex, t.Color)
+        if ok then col = c3 end
+    end
+    if t.Id and Skin.LoadId then
+        Skin.LoadId(tostring(t.Id), true, col)
+    elseif col then
+        Skin.SetColor(col)
+    end
 end
 
 -- Notify
@@ -851,10 +960,11 @@ Library.Key = Library.KeySystem
 function Library:CreateWindow(cfg)
     cfg = cfg or {}
     if cfg.Sound ~= nil then Library:SetSound(cfg.Sound) end
-    local Window = {Visible = true, Floats = {}, Tabs = {}, Flags = {}, Collapsed = false}
+    local Window = {Visible = true, Floats = {}, FloatInfos = {}, FlagCount = {}, Tabs = {}, Flags = {}, Collapsed = false, Loading = false}
     local conns, reg, tags = {}, {}, {}
     local function WConn(sig, fn) local c = Conn(sig, fn) table.insert(conns, c) return c end
     local T = {}
+    local curTrans = cfg.Transparency or 0.05
     local function SetT(col)
         local key = type(col) == "string" and col:lower() or (col == nil and Library.Themes[1].Name:lower() or nil)
         col = Library.ResolveColor(col)
@@ -894,7 +1004,7 @@ function Library:CreateWindow(cfg)
     end)
     WConn(RS.RenderStepped, function() bgrad.Rotation = (os.clock() * 50) % 360 end)
 
-    local Main = New("CanvasGroup", {Name = "Main", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(1, -3, 1, -3), BackgroundColor3 = WHITE, BackgroundTransparency = cfg.Transparency or 0.05, ZIndex = 6, Parent = Holder})
+    local Main = New("CanvasGroup", {Name = "Main", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(1, -3, 1, -3), BackgroundColor3 = WHITE, BackgroundTransparency = curTrans, ZIndex = 6, Parent = Holder})
     Corner(Main, 13)
     local MainScale = New("UIScale", {Scale = 0.6, Parent = Main})
     local mgrad = New("UIGradient", {Rotation = 45, Parent = Main})
@@ -1098,7 +1208,7 @@ function Library:CreateWindow(cfg)
     end
 
     function Window:SetColor(c) SetT(c) Library.Accent = T.Accent for _, fn in ipairs(reg) do pcall(fn) end end
-    function Window:SetTransparency(n) Tween(Main, 0.3, {BackgroundTransparency = math.clamp(n, 0, 1)}) end
+    function Window:SetTransparency(n) curTrans = math.clamp(n, 0, 1) Tween(Main, 0.3, {BackgroundTransparency = curTrans}) end
     function Window:SetTitle(s) title.Text = s end
     function Window:SetDescription(s) desc.Text = s end
     function Window:SetIcon(n) wIcon.Visible = ApplyIcon(wIcon, n) end
@@ -1108,6 +1218,10 @@ function Library:CreateWindow(cfg)
         if n == nil or n == "" or n == "None" then Library.ClickSound = "None" return end
         Library.ClickSound = n
         Library:PlaySound(n)
+    end
+    function Window:ResetPosition()
+        if Window.Collapsed then return end
+        Tween(Holder, 0.5, {Position = UDim2.fromScale(0.5, 0.5)}, Enum.EasingStyle.Back)
     end
 
     function Window:Tag(c)
@@ -1160,13 +1274,88 @@ function Library:CreateWindow(cfg)
         end
     end
 
-    -- Config saving
+    -- ======================================================
+    -- Config saving: everything lives in one folder
+    --   flags (every toggle/slider/dropdown/textbox/color),
+    --   floating buttons (look + position), window + open button position,
+    --   theme, sounds, skin (user id, color, recent list)
+    -- ======================================================
     local CFG_DIR = cfg.ConfigFolder or "VOX_HUB"
     local function fsOk() return (writefile and readfile and isfile and makefolder and isfolder and listfiles) and true or false end
     local function ser(v) if typeof(v) == "Color3" then return {__c = v:ToHex()} end return v end
     local function de(v) if type(v) == "table" and v.__c then return Color3.fromHex(v.__c) end return v end
     local function ensure() if not isfolder(CFG_DIR) then makefolder(CFG_DIR) end end
     local function noFs() Library:Notify({Title = "Config", Message = "Your executor does not support file functions", Color = "Red", Time = 4}) end
+
+    local function posData(g)
+        local p = g.Position
+        return {p.X.Scale, p.X.Offset, p.Y.Scale, p.Y.Offset}
+    end
+    local function posApply(g, t)
+        if type(t) ~= "table" or #t < 4 then return end
+        local s = Gui.AbsoluteSize
+        local ox, oy = t[2], t[4]
+        if t[1] == 0 then ox = math.clamp(ox, 30, math.max(30, s.X - 30)) end
+        if t[3] == 0 then oy = math.clamp(oy, 30, math.max(30, s.Y - 30)) end
+        g.Position = UDim2.new(t[1], ox, t[3], oy)
+    end
+
+    local function collect()
+        local data = {__v = 2, flags = {}, floats = {}, window = {}, skin = {}}
+        for k, o in pairs(Window.Flags) do
+            local good, v = pcall(function() return o:Get() end)
+            if good and v ~= nil then data.flags[k] = ser(v) end
+        end
+        for _, fl in pairs(Window.Floats) do
+            local good, d = pcall(function() return fl:GetData() end)
+            if good and d then table.insert(data.floats, d) end
+        end
+        data.window = {
+            color = T.Accent:ToHex(),
+            transparency = curTrans,
+            pos = (not Window.Collapsed) and posData(Holder) or nil,
+            openPos = Window.OpenButton and posData(Window.OpenButton) or nil,
+            sound = Library.SoundEnabled,
+            volume = Library.SoundVolume,
+            clickSound = Library.ClickSound,
+        }
+        pcall(function() data.skin = Skin.Export() end)
+        return data
+    end
+
+    local function applyData(data)
+        if type(data) ~= "table" then return false end
+        Window.Loading = true
+        local flags = data.flags or (data.__v == nil and data) or {}
+        local w = data.window or {}
+        pcall(function()
+            if w.color then Window:SetColor(Color3.fromHex(w.color)) end
+            if w.transparency then Window:SetTransparency(w.transparency) end
+            if w.pos and not Window.Collapsed then posApply(Holder, w.pos) end
+            if w.openPos and Window.OpenButton then posApply(Window.OpenButton, w.openPos) end
+            if w.sound ~= nil then Library.SoundEnabled = w.sound and true or false end
+            if w.volume then Library.SoundVolume = w.volume end
+            if w.clickSound then Library.ClickSound = w.clickSound end
+        end)
+        for k, v in pairs(flags) do
+            local o = Window.Flags[k]
+            if o then pcall(function() o:Set(de(v)) end) end
+        end
+        for info, fl in pairs(Window.Floats) do pcall(function() fl:Destroy() end) end
+        for _, d in ipairs(data.floats or {}) do
+            local info = Window.FloatInfos[d.Key]
+            if info then
+                pcall(function()
+                    local cols = {}
+                    for _, hx in ipairs(d.Colors or {}) do table.insert(cols, Color3.fromHex(hx)) end
+                    Window:SpawnFloat(info, {Name = d.Name, W = d.W, H = d.H, Transparency = d.Transparency, Color = Color3.fromHex(d.Color), Colors = cols, Thickness = d.Thickness, Speed = d.Speed, Strength = d.Strength}, d.Pos)
+                end)
+            end
+        end
+        if data.skin then pcall(function() Skin.Import(data.skin) end) end
+        Window.Loading = false
+        return true
+    end
 
     function Window:ListConfigs()
         local out = {}
@@ -1181,19 +1370,16 @@ function Library:CreateWindow(cfg)
         table.sort(out)
         return out
     end
-    function Window:SaveConfig(name)
+    function Window:SaveConfig(name, silent)
         name = (name and name ~= "") and name or "default"
-        if not fsOk() then noFs() return false end
+        if not fsOk() then if not silent then noFs() end return false end
         local ok = pcall(function()
             ensure()
-            local data = {}
-            for k, o in pairs(Window.Flags) do
-                local good, v = pcall(function() return o:Get() end)
-                if good then data[k] = ser(v) end
-            end
-            writefile(CFG_DIR .. "/" .. name .. ".json", HttpService:JSONEncode(data))
+            writefile(CFG_DIR .. "/" .. name .. ".json", HttpService:JSONEncode(collect()))
         end)
-        Library:Notify({Title = "Config", Message = ok and ('Saved "' .. name .. '"') or "Failed to save config", Color = ok and nil or "Red", Time = 3, Icon = "save"})
+        if not silent or not ok then
+            Library:Notify({Title = "Config", Message = ok and ('Saved "' .. name .. '"') or "Failed to save config", Color = ok and nil or "Red", Time = 3, Icon = "save"})
+        end
         return ok
     end
     function Window:LoadConfig(name)
@@ -1206,11 +1392,9 @@ function Library:CreateWindow(cfg)
         end
         local ok = pcall(function()
             local data = HttpService:JSONDecode(readfile(path))
-            for k, v in pairs(data) do
-                local o = Window.Flags[k]
-                if o then pcall(function() o:Set(de(v)) end) end
-            end
+            if not applyData(data) then error("bad data") end
         end)
+        Window.Loading = false
         Library:Notify({Title = "Config", Message = ok and ('Loaded "' .. name .. '"') or "Failed to load config", Color = ok and nil or "Red", Time = 3})
         return ok
     end
@@ -1220,6 +1404,27 @@ function Library:CreateWindow(cfg)
         local ok = pcall(function() if isfile(path) then delfile(path) end end)
         Library:Notify({Title = "Config", Message = ok and ('Deleted "' .. tostring(name) .. '"') or "Failed to delete", Color = ok and nil or "Red", Time = 3})
         return ok
+    end
+    function Window:ExportConfig()
+        local ok, str = pcall(function() return HttpService:JSONEncode(collect()) end)
+        if not ok then
+            Library:Notify({Title = "Config", Message = "Failed to export", Color = "Red", Time = 3})
+            return nil
+        end
+        local copied = pcall(function() setclipboard(str) end)
+        Library:Notify({Title = "Config", Message = copied and "Config copied to clipboard" or "Clipboard not supported here", Color = copied and nil or "Orange", Time = 3})
+        return str
+    end
+    function Window:ImportConfig(str)
+        local ok, data = pcall(function() return HttpService:JSONDecode(tostring(str)) end)
+        if not ok or type(data) ~= "table" then
+            Library:Notify({Title = "Config", Message = "That text is not a valid config", Color = "Red", Time = 3})
+            return false
+        end
+        local good = applyData(data)
+        Window.Loading = false
+        Library:Notify({Title = "Config", Message = good and "Config imported" or "Import failed", Color = good and nil or "Red", Time = 3})
+        return good
     end
     function Window:SetAutoLoad(name)
         if not fsOk() then noFs() return end
@@ -1239,6 +1444,21 @@ function Library:CreateWindow(cfg)
     function Window:LoadAutoConfig()
         local n = Window:GetAutoLoad()
         if n then Window:LoadConfig(n) end
+    end
+    -- saves the config again every 20 seconds while it is on
+    local autoSaveOn = false
+    function Window:SetAutoSave(on, getName)
+        autoSaveOn = on and true or false
+        if autoSaveOn and not Window.AutoSaving then
+            Window.AutoSaving = true
+            task.spawn(function()
+                while autoSaveOn and Holder.Parent do
+                    task.wait(20)
+                    if autoSaveOn then Window:SaveConfig(getName and getName() or "default", true) end
+                end
+                Window.AutoSaving = false
+            end)
+        end
     end
 
     -- Popups (5D)
@@ -1614,11 +1834,13 @@ function Library:CreateWindow(cfg)
         end)
     end
 
-    function Window:SpawnFloat(info, o)
+    -- pos (optional) = saved {xScale, xOffset, yScale, yOffset}
+    function Window:SpawnFloat(info, o, pos)
         if Window.Floats[info] then Window.Floats[info]:Destroy() end
         o = {Name = o.Name or info.Name, W = o.W or o.Size or 56, H = o.H or o.Size or 56, Transparency = o.Transparency or 0.1, Color = o.Color or T.Accent, Colors = o.Colors, Thickness = o.Thickness or 2.5, Speed = o.Speed or 60, Strength = o.Strength or 1}
         local holder, b, st, stateL = BuildFloat(Gui, o, info.Toggle)
         holder.Position = UDim2.new(0.5, 0, 0.3, 0)
+        if pos then posApply(holder, pos) end
         local norm = UDim2.fromOffset(o.W, o.H)
         local th = o.Thickness
         local sc = New("UIScale", {Scale = 0, Parent = holder})
@@ -1664,6 +1886,16 @@ function Library:CreateWindow(cfg)
             Tween(sc, 0.25, {Scale = 0}, Enum.EasingStyle.Back, Enum.EasingDirection.In)
             Debris:AddItem(holder, 0.3)
         end
+        -- everything needed to rebuild this button later (look + position)
+        function obj:GetData()
+            local cols = {}
+            for _, c3 in ipairs(o.Colors or {}) do table.insert(cols, c3:ToHex()) end
+            return {
+                Key = info.Key or info.Name, Name = o.Name, W = o.W, H = o.H, Transparency = o.Transparency,
+                Color = o.Color:ToHex(), Colors = cols, Thickness = o.Thickness, Speed = o.Speed, Strength = o.Strength,
+                Pos = posData(holder),
+            }
+        end
         dragObj = Draggable(b, holder, {Speed = 10, OnBegin = function() Tween(sc, 0.15, {Scale = 0.9}) end, OnEnd = function(m)
             Tween(sc, 0.4, {Scale = 1}, Enum.EasingStyle.Back)
             if m < 8 then
@@ -1675,14 +1907,14 @@ function Library:CreateWindow(cfg)
         Window.Floats[info] = obj
     end
 
-    -- Skin page: big viewport square (drag to spin), skin color, load skin by ID, effects list
+    -- Skin page: real-skin viewport (drag to spin), skin color, load by ID or name, players list, recent, undo, effects
     local function BuildSkinPage(P)
         local Skin = Library.Skin
         pcall(function()
             local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
             if h and not Skin.OrigDesc then Skin.OrigDesc = h:GetAppliedDescription() end
         end)
-        P:Note({Title = "Skin", Text = "Drag the square to spin your skin. Changes are client-side: you see them, other players do not.", Color = "Sky"})
+        P:Note({Title = "Skin", Text = "The square shows your REAL outfit (built from your avatar, not a dummy). Type any user ID or username to wear their skin. Changes are client-side: you see them, other players do not.", Color = "Sky"})
         local area = P:Frame(236)
 
         local sq = New("Frame", {Position = UDim2.fromOffset(0, 6), Size = UDim2.fromOffset(216, 216), BackgroundColor3 = T.Dark, BorderSizePixel = 0, ClipsDescendants = true, Parent = area})
@@ -1719,7 +1951,17 @@ function Library:CreateWindow(cfg)
                 dist = math.clamp(size.Y * 1.6 + 2, 6, 24)
             end)
         end
+
+        -- builds the preview from your real applied outfit (clothes, accessories, body, face), falls back to a clone
         local function refreshPreview()
+            local h = myHum()
+            if h then
+                local okD, d = pcall(function() return h:GetAppliedDescription() end)
+                if okD and d then
+                    local okR, rig = pcall(function() return Players:CreateHumanoidModelFromDescription(d, h.RigType) end)
+                    if okR and rig then setModel(rig) return end
+                end
+            end
             local c = LP.Character
             if not c then return end
             local ok, m = pcall(function()
@@ -1767,7 +2009,8 @@ function Library:CreateWindow(cfg)
         end)
 
         local function tiny(text, x, y, w, fn)
-            local b = New("TextButton", {AnchorPoint = Vector2.new(x < 0 and 1 or 0, 0), Position = UDim2.new(x < 0 and 1 or 0, x < 0 and x or x, 0, y), Size = UDim2.fromOffset(w, 22), BackgroundColor3 = T.Dark, BackgroundTransparency = 0.2, Text = text, Font = Font.GothamBlack, TextSize = 11, TextColor3 = WHITE, AutoButtonColor = false, ZIndex = 7, Parent = sq})
+            local right = x < 0
+            local b = New("TextButton", {AnchorPoint = Vector2.new(right and 1 or 0, 0), Position = UDim2.new(right and 1 or 0, x, 0, y), Size = UDim2.fromOffset(w, 22), BackgroundColor3 = T.Dark, BackgroundTransparency = 0.2, Text = text, Font = Font.GothamBlack, TextSize = 11, TextColor3 = WHITE, AutoButtonColor = false, ZIndex = 7, Parent = sq})
             Corner(b, 6)
             Stroke(b, T.Accent, 1, 0.3)
             b.MouseButton1Click:Connect(function() fn(b) end)
@@ -1779,6 +2022,7 @@ function Library:CreateWindow(cfg)
         end)
         tiny("+", 8, 186, 24, function() dist = math.clamp(dist - 1.5, 4, 24) end)
         tiny("-", 38, 186, 24, function() dist = math.clamp(dist + 1.5, 4, 24) end)
+        tiny("SYNC", -8, 186, 48, function() task.spawn(refreshPreview) end)
 
         -- real loading overlay
         local ov = New("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = BLACK, BackgroundTransparency = 0.3, Visible = false, Active = true, ZIndex = 9, Parent = sq})
@@ -1816,7 +2060,7 @@ function Library:CreateWindow(cfg)
         end
 
         local function rcBtn(text, y, h)
-            local b = New("TextButton", {Position = UDim2.new(0, 226, 0, y), Size = UDim2.new(1, -230, 0, h or 34), BackgroundColor3 = T.Elem, Text = text, Font = Font.GothamBold, TextSize = 12, TextColor3 = T.Text, AutoButtonColor = false, Parent = area})
+            local b = New("TextButton", {Position = UDim2.new(0, 226, 0, y), Size = UDim2.new(1, -230, 0, h or 28), BackgroundColor3 = T.Elem, Text = text, Font = Font.GothamBold, TextSize = 12, TextColor3 = T.Text, AutoButtonColor = false, Parent = area})
             Corner(b, 8)
             local s = Stroke(b, T.Accent, 1.5, 0.15)
             Reg(function() b.BackgroundColor3 = T.Elem s.Color = T.Accent end)
@@ -1826,7 +2070,7 @@ function Library:CreateWindow(cfg)
         end
 
         -- skin color (right of the square)
-        local colBtn = rcBtn("Skin Color", 6)
+        local colBtn = rcBtn("Skin Color", 6, 30)
         colBtn.TextXAlignment = Left
         New("UIPadding", {PaddingLeft = UDim.new(0, 10), Parent = colBtn})
         local sw = New("Frame", {AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.fromOffset(30, 18), BackgroundColor3 = Skin.Color or defaultColor(), BorderSizePixel = 0, Parent = colBtn})
@@ -1847,8 +2091,8 @@ function Library:CreateWindow(cfg)
             end)
         end)
 
-        -- user id + real loading
-        local idBox = New("TextBox", {Position = UDim2.new(0, 226, 0, 48), Size = UDim2.new(1, -230, 0, 30), BackgroundColor3 = T.Dark, PlaceholderText = "User ID...", PlaceholderColor3 = T.Sub, Text = "", TextColor3 = T.Text, Font = Font.GothamBold, TextSize = 12, ClearTextOnFocus = false, Parent = area})
+        -- user id or username + real loading
+        local idBox = New("TextBox", {Position = UDim2.new(0, 226, 0, 42), Size = UDim2.new(1, -230, 0, 28), BackgroundColor3 = T.Dark, PlaceholderText = "User ID or name...", PlaceholderColor3 = T.Sub, Text = "", TextColor3 = T.Text, Font = Font.GothamBold, TextSize = 12, ClearTextOnFocus = false, Parent = area})
         Corner(idBox, 8)
         local idst = Stroke(idBox, T.Accent, 1.5, 0.2)
         idBox.Focused:Connect(function() Tween(idst, 0.2, {Transparency = 0}) end)
@@ -1856,75 +2100,131 @@ function Library:CreateWindow(cfg)
 
         local dd
         local busy = false
-        local function loadSkin(txt)
+        local function fail(msg)
+            showLoad(false)
+            busy = false
+            Library:Notify({Title = "Skin", Message = msg, Color = "Red", Time = 3})
+        end
+
+        -- txt = user id or username. silent = no success popup. keepColor = body color to put back after loading.
+        local function loadSkin(txt, silent, keepColor)
             if busy then return end
-            local id = tonumber(((txt or ""):gsub("[^%d]", "")))
-            if not id then
-                Library:Notify({Title = "Skin", Message = "Type a valid user ID", Color = "Red", Time = 3})
+            local raw = ((txt or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+            if raw == "" then
+                Library:Notify({Title = "Skin", Message = "Type a user ID or a username", Color = "Red", Time = 3})
                 return
             end
             busy = true
             task.spawn(function()
                 showLoad(true)
                 step(0.1, "Looking up the player...")
+                local id = tonumber(raw)
+                if not id then
+                    local okI, rid = pcall(function() return Players:GetUserIdFromNameAsync(raw) end)
+                    if okI then id = rid end
+                end
+                if not id then return fail("No account found for that name") end
                 local okN, uname = pcall(function() return Players:GetNameFromUserIdAsync(id) end)
-                if not okN then
-                    showLoad(false)
-                    busy = false
-                    Library:Notify({Title = "Skin", Message = "No account found for that ID", Color = "Red", Time = 3})
-                    return
+                if not okN then return fail("No account found for that ID") end
+
+                step(0.35, "Downloading " .. uname .. "'s outfit...")
+                local desc
+                for _ = 1, 3 do
+                    local okD, d = pcall(function() return Players:GetHumanoidDescriptionFromUserId(id) end)
+                    if okD and d then desc = d break end
+                    task.wait(0.5)
                 end
-                step(0.4, "Downloading " .. uname .. "'s outfit...")
-                local okD, desc = pcall(function() return Players:GetHumanoidDescriptionFromUserId(id) end)
-                if not okD or not desc then
-                    showLoad(false)
-                    busy = false
-                    Library:Notify({Title = "Skin", Message = "Could not load that outfit", Color = "Red", Time = 3})
-                    return
-                end
-                step(0.6, "Building the preview...")
+                if not desc then return fail("Could not download that outfit") end
+
+                step(0.55, "Building the preview...")
                 local rigType = Enum.HumanoidRigType.R15
-                pcall(function() rigType = LP.Character:FindFirstChildOfClass("Humanoid").RigType end)
+                pcall(function() rigType = myHum().RigType end)
                 local okR, rig = pcall(function() return Players:CreateHumanoidModelFromDescription(desc, rigType) end)
                 if okR and rig then setModel(rig) end
-                step(0.85, "Applying to your character...")
+
+                step(0.8, "Applying to your character...")
                 local applied = Skin.Apply(desc)
                 if applied then
-                    Skin.Color = nil
-                    task.wait(0.5)
+                    Skin.LastId = id
+                    Skin.AddRecent(id, uname)
+                    task.wait(0.3)
+                    if keepColor then Skin.SetColor(keepColor) sw.BackgroundColor3 = keepColor
+                    else Skin.Color = nil sw.BackgroundColor3 = defaultColor() end
                     Skin.Reapply()
-                    refreshPreview()
                 end
                 step(1, applied and "Done!" or "Preview only")
-                task.wait(0.5)
+                task.wait(0.4)
                 showLoad(false)
                 busy = false
                 if applied then
-                    Library:Notify({Title = "Skin", Message = uname .. "'s skin applied", Time = 3})
+                    if not silent then Library:Notify({Title = "Skin", Message = uname .. "'s skin applied", Time = 3}) end
                 else
                     Library:Notify({Title = "Skin", Message = "The game blocked changing your character. Showing a preview only.", Color = "Orange", Time = 4})
                 end
             end)
         end
+        Skin.LoadId = function(id, silent, keepColor)
+            idBox.Text = tostring(id)
+            loadSkin(tostring(id), silent, keepColor)
+        end
         idBox.FocusLost:Connect(function(enter)
-            idBox.Text = (idBox.Text:gsub("[^%d]", ""))
             if enter then loadSkin(idBox.Text) end
         end)
-        local loadBtn = rcBtn("Load Skin", 84)
+
+        local loadBtn = rcBtn("Load Skin", 74)
         loadBtn.MouseButton1Click:Connect(function() loadSkin(idBox.Text) end)
 
-        local resetBtn = rcBtn("Reset Skin", 124)
+        local undoBtn = rcBtn("Undo", 106)
+        undoBtn.MouseButton1Click:Connect(function()
+            local d = Skin.Prev
+            if not d then
+                Library:Notify({Title = "Skin", Message = "Nothing to undo yet", Color = "Orange", Time = 2})
+                return
+            end
+            task.spawn(function()
+                Skin.Apply(d, true)
+                Skin.LastId = nil
+                Skin.Reapply()
+                task.wait(0.3)
+                refreshPreview()
+            end)
+        end)
+
+        local resetBtn = rcBtn("Reset Skin", 138)
         resetBtn.MouseButton1Click:Connect(function()
             task.spawn(function()
                 for n in pairs(Skin.Active) do Skin.Set(n, false) end
                 if dd then dd:Set({}) end
-                if Skin.OrigDesc then Skin.Apply(Skin.OrigDesc) end
-                Skin.Color = nil
+                if Skin.OrigDesc then Skin.Apply(Skin.OrigDesc, true) end
+                Skin.LastDesc, Skin.LastId, Skin.Color = nil, nil, nil
+                sw.BackgroundColor3 = defaultColor()
                 task.wait(0.6)
                 refreshPreview()
             end)
         end)
-        New("TextLabel", {BackgroundTransparency = 1, Position = UDim2.new(0, 226, 0, 168), Size = UDim2.new(1, -230, 0, 40), Font = Font.Gotham, Text = "Drag the square to rotate. SPIN toggles auto rotate.", TextSize = 10, TextColor3 = T.Sub, TextWrapped = true, TextXAlignment = Left, TextYAlignment = Enum.TextYAlignment.Top, Parent = area})
+        New("TextLabel", {BackgroundTransparency = 1, Position = UDim2.new(0, 226, 0, 172), Size = UDim2.new(1, -230, 0, 44), Font = Font.Gotham, Text = "Drag the square to rotate. SPIN toggles auto rotate, SYNC rebuilds the preview from what you wear.", TextSize = 10, TextColor3 = T.Sub, TextWrapped = true, TextXAlignment = Left, TextYAlignment = Enum.TextYAlignment.Top, Parent = area})
+
+        -- everyone in the server: pick one to copy their skin
+        local function playerNames()
+            local t = {}
+            for _, p in ipairs(Players:GetPlayers()) do if p ~= LP then table.insert(t, p.Name) end end
+            table.sort(t)
+            return t
+        end
+        local pd = P:Dropdown({Name = "Players In Server", Desc = "Pick a player to copy their skin", Options = playerNames(), Search = true, NoFlag = true, Callback = function(v)
+            if not v then return end
+            local p = Players:FindFirstChild(v)
+            if p and p:IsA("Player") then loadSkin(tostring(p.UserId)) end
+        end})
+        WConn(Players.PlayerAdded, function() task.wait(0.3) pd:Refresh(playerNames(), false) end)
+        WConn(Players.PlayerRemoving, function() task.wait(0.3) pd:Refresh(playerNames(), false) end)
+
+        -- last skins you loaded (saved in the config)
+        local rd = P:Dropdown({Name = "Recent Skins", Desc = "Skins you loaded before", Options = Skin.Recent, NoFlag = true, Callback = function(v)
+            local id = v and tostring(v):match("| (%d+)$")
+            if id then loadSkin(id) end
+        end})
+        Skin.OnRecent = function() rd:Refresh(Skin.Recent, false) end
 
         -- add items (effects list)
         dd = P:Dropdown({Name = "Add Items", Desc = "Headless, Korblox, auras and head effects", Options = Skin.Names, Multi = true, Callback = function(list)
@@ -1939,16 +2239,19 @@ function Library:CreateWindow(cfg)
                     end
                 end
             end
-            task.delay(0.6, refreshPreview)
+            task.delay(0.6, function() refreshPreview() end)
         end})
 
-        WConn(LP.CharacterAdded, function()
+        -- after you respawn the last skin, color and effects are put back automatically
+        WConn(LP.CharacterAdded, function(char)
+            pcall(function() char:WaitForChild("Humanoid", 8) end)
             task.wait(1.5)
+            if Skin.LastDesc then Skin.Apply(Skin.LastDesc, true) end
             if Skin.Color then Skin.SetColor(Skin.Color) end
             Skin.Reapply()
             refreshPreview()
         end)
-        refreshPreview()
+        task.spawn(refreshPreview)
     end
 
     local MakeSubPage
@@ -2014,6 +2317,12 @@ function Library:CreateWindow(cfg)
         end
 
         local function Mini(f, leftX, cy, info)
+            info.Key = (Tab.Prefix or "Tab") .. ":" .. info.Name
+            local n = (Window.FlagCount["float:" .. info.Key] or 0) + 1
+            Window.FlagCount["float:" .. info.Key] = n
+            if n > 1 then info.Key = info.Key .. "#" .. n end
+            Window.FloatInfos[info.Key] = info
+
             local m = New("TextButton", {AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, leftX, 0, cy), Size = UDim2.fromOffset(24, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.7, Text = "", AutoButtonColor = false, ZIndex = 5, Parent = f})
             Corner(m, 6)
             local ms = New("UIStroke", {Color = T.Accent, Thickness = 1.5, Transparency = 0.1, Parent = m})
@@ -2056,7 +2365,19 @@ function Library:CreateWindow(cfg)
             box.FocusLost:Connect(function() Tween(st, 0.25, {Transparency = 0.4, Thickness = 1}) end)
         end
 
-        local function Flag(c, obj) if c.Flag then Window.Flags[c.Flag] = obj end end
+        -- every element is saved automatically. Key = explicit Flag, or "Page:Name" (+ #n when the name repeats).
+        -- Use NoFlag = true to keep an element out of the config.
+        local function Flag(c, obj, sub)
+            if c.NoFlag then return end
+            local key = c.Flag
+            if not key then
+                key = (Tab.Prefix or "Tab") .. ":" .. (c.Name or "Item") .. (sub or "")
+                local n = (Window.FlagCount[key] or 0) + 1
+                Window.FlagCount[key] = n
+                if n > 1 then key = key .. "#" .. n end
+            end
+            Window.Flags[key] = obj
+        end
 
         -- read-only row: name on the left, value on the right
         function Tab:Info(c)
@@ -2096,27 +2417,29 @@ function Library:CreateWindow(cfg)
             return obj
         end
 
+        -- Note: big, bright card so it can't be missed
         function Tab:Note(c)
             c = c or {}
             local col = Library.ResolveColor(c.Color or "Yellow")
-            local f = New("Frame", {Size = UDim2.new(1, -4, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = col, BackgroundTransparency = 0.78, BorderSizePixel = 0, ClipsDescendants = true, Parent = scroll})
-            Corner(f, 9)
-            local st = Stroke(f, col, 1, 0.35)
+            local f = New("Frame", {Size = UDim2.new(1, -4, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = col:Lerp(BLACK, 0.5), BackgroundTransparency = 0, BorderSizePixel = 0, ClipsDescendants = true, Parent = scroll})
+            Corner(f, 10)
+            local st = Stroke(f, col, 2, 0.05)
+            New("UIGradient", {Color = ColorSequence.new(col:Lerp(BLACK, 0.35), col:Lerp(BLACK, 0.65)), Rotation = 25, Parent = f})
             New("UIScale", {Name = "EScale", Parent = f})
-            local bar = New("Frame", {Size = UDim2.new(0, 4, 1, 0), BackgroundColor3 = col, BorderSizePixel = 0, Parent = f})
+            local bar = New("Frame", {Size = UDim2.new(0, 6, 1, 0), BackgroundColor3 = col, BorderSizePixel = 0, Parent = f})
             local inner = New("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Parent = f})
-            New("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder, Parent = inner})
-            New("UIPadding", {PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 10), PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 9), Parent = inner})
-            local tl = New("TextLabel", {LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1, Font = Font.GothamBlack, Text = string.upper(c.Title or "NOTE"), TextSize = 11, TextColor3 = col, TextXAlignment = Left, Parent = inner})
-            local bl = New("TextLabel", {LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Font = Font.Gotham, Text = c.Text or "", TextSize = 12, TextColor3 = Color3.fromRGB(235, 240, 237), TextXAlignment = Left, TextWrapped = true, Parent = inner})
-            TS:Create(st, TweenInfo.new(1.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Transparency = 0.8}):Play()
-            TS:Create(bar, TweenInfo.new(1.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {BackgroundTransparency = 0.4}):Play()
+            New("UIListLayout", {Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = inner})
+            New("UIPadding", {PaddingLeft = UDim.new(0, 18), PaddingRight = UDim.new(0, 12), PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 11), Parent = inner})
+            local tl = New("TextLabel", {LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, Font = Font.GothamBlack, Text = "!  " .. string.upper(c.Title or "NOTE"), TextSize = 14, TextColor3 = col:Lerp(WHITE, 0.45), TextXAlignment = Left, Parent = inner})
+            local bl = New("TextLabel", {LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Font = Font.GothamMedium, Text = c.Text or "", TextSize = 13, TextColor3 = WHITE, TextXAlignment = Left, TextWrapped = true, Parent = inner})
+            TS:Create(st, TweenInfo.new(1.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Transparency = 0.55}):Play()
+            TS:Create(bar, TweenInfo.new(1.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {BackgroundTransparency = 0.35}):Play()
             local obj = {}
             function obj:SetText(s) bl.Text = s end
-            function obj:SetTitle(s) tl.Text = string.upper(s) end
+            function obj:SetTitle(s) tl.Text = "!  " .. string.upper(s) end
             function obj:SetColor(n)
                 local cc = Library.ResolveColor(n)
-                Tween(f, 0.3, {BackgroundColor3 = cc}) Tween(bar, 0.3, {BackgroundColor3 = cc}) Tween(tl, 0.3, {TextColor3 = cc}) st.Color = cc
+                Tween(f, 0.3, {BackgroundColor3 = cc:Lerp(BLACK, 0.5)}) Tween(bar, 0.3, {BackgroundColor3 = cc}) Tween(tl, 0.3, {TextColor3 = cc:Lerp(WHITE, 0.45)}) st.Color = cc
             end
             return obj
         end
@@ -2223,7 +2546,8 @@ function Library:CreateWindow(cfg)
                 Reg(function() vl.TextColor3 = T.Accent end)
                 local holder = New("Frame", {Position = UDim2.fromOffset(12, topH + 4), Size = UDim2.new(1, -78, 0, 18), BackgroundTransparency = 1, Parent = f})
                 obj.Slider = MakeSlider(holder, S.Min, S.Max, S.Default, S.Increment, S.Callback, vl, scroll)
-                if S.Flag then Window.Flags[S.Flag] = obj.Slider end
+                if S.Flag then Window.Flags[S.Flag] = obj.Slider
+                else Flag({Name = c.Name, NoFlag = c.NoFlag}, obj.Slider, "/slider") end
             end
             render(false)
             Flag(c, obj)
@@ -2398,11 +2722,45 @@ function Library:CreateWindow(cfg)
             return obj
         end
 
+        -- ready made "Settings" block: theme, transparency, click sounds, volume, FPS and ping.
+        -- Everything in it is saved by the config.
+        function Tab:Settings()
+            Tab:Section("Interface")
+            Tab:Dropdown({Name = "Theme Color", Desc = "Changes the whole UI color", Options = Library.ColorNames, Search = true, Flag = "UI_Theme", Callback = function(v)
+                if v and not Window.Loading then Window:SetColor(v) end
+            end})
+            Tab:Slider({Name = "UI Transparency", Min = 0, Max = 0.9, Default = curTrans, Increment = 0.05, Flag = "UI_Transparency", Callback = function(v) Window:SetTransparency(v) end})
+            Tab:Section("Sound")
+            Tab:Toggle({Name = "UI Sounds", Default = Library.SoundEnabled, MiniButton = false, Flag = "UI_Sound", Callback = function(v) Library.SoundEnabled = v end})
+            Tab:Dropdown({Name = "Click Sound", Options = Library.SoundNames, Default = Library.ClickSound, Search = true, Silent = true, Flag = "UI_ClickSound", Callback = function(v)
+                if not v then return end
+                Library.ClickSound = v
+                if not Window.Loading then Library:PlaySound(v) end
+            end})
+            Tab:Slider({Name = "Sound Volume", Min = 0, Max = 1, Default = Library.SoundVolume, Increment = 0.05, Flag = "UI_Volume", Callback = function(v) Library.SoundVolume = v end})
+            Tab:Section("Performance")
+            local fpsI = Tab:Info({Name = "FPS", Value = "-"})
+            local pingI = Tab:Info({Name = "Ping", Value = "-"})
+            local acc, frames = 0, 0
+            WConn(RS.RenderStepped, function(dt)
+                acc = acc + dt
+                frames = frames + 1
+                if acc >= 0.5 then
+                    fpsI:SetValue(math.floor(frames / acc + 0.5))
+                    local ms
+                    pcall(function() ms = math.floor(LP:GetNetworkPing() * 1000 + 0.5) end)
+                    pingI:SetValue(ms and (ms .. " ms") or "-")
+                    acc, frames = 0, 0
+                end
+            end)
+        end
+
         function Tab:ConfigManager()
             Tab:Section("Configuration")
-            local nameBox = Tab:Textbox({Name = "Config Name", Placeholder = "default"})
+            Tab:Note({Title = "Saves everything", Text = "A config keeps every toggle, slider, dropdown, textbox and color, your floating buttons (look + position), window position, theme, sounds and your skin. Files are stored in the folder: " .. CFG_DIR, Color = "Emerald"})
+            local nameBox = Tab:Textbox({Name = "Config Name", Placeholder = "default", NoFlag = true})
             local dd
-            dd = Tab:Dropdown({Name = "Saved Configs", Desc = "Pick one to load or delete", Options = Window:ListConfigs(), Callback = function(v)
+            dd = Tab:Dropdown({Name = "Saved Configs", Desc = "Pick one to load or delete", Options = Window:ListConfigs(), NoFlag = true, Callback = function(v)
                 if v then nameBox:Set(v, true) end
             end})
             local function current()
@@ -2411,19 +2769,27 @@ function Library:CreateWindow(cfg)
                 return n
             end
             local function refresh() dd:Refresh(Window:ListConfigs(), false) end
-            Tab:Button({Name = "Save Config", Desc = "Writes every flagged option to a file", MiniButton = false, Callback = function() Window:SaveConfig(current()) refresh() end})
+            Tab:Button({Name = "Save Config", Desc = "Writes everything to a file", MiniButton = false, Callback = function() Window:SaveConfig(current()) refresh() end})
             Tab:Button({Name = "Load Config", Desc = "Applies the saved values", MiniButton = false, Callback = function() Window:LoadConfig(current()) end})
             Tab:Button({Name = "Delete Config", MiniButton = false, Callback = function() Window:DeleteConfig(current()) refresh() end})
             Tab:Button({Name = "Refresh List", MiniButton = false, Callback = refresh})
-            Tab:Toggle({Name = "Auto Load", Desc = "Load this config on startup", MiniButton = false, Default = Window:GetAutoLoad() ~= nil, Callback = function(on)
+            Tab:Toggle({Name = "Auto Load", Desc = "Load this config on startup", MiniButton = false, NoFlag = true, Default = Window:GetAutoLoad() ~= nil, Callback = function(on)
                 Window:SetAutoLoad(on and current() or nil)
             end})
+            Tab:Toggle({Name = "Auto Save", Desc = "Saves again every 20 seconds", MiniButton = false, NoFlag = true, Callback = function(on)
+                Window:SetAutoSave(on, current)
+            end})
+            Tab:Section("Share")
+            Tab:Button({Name = "Export To Clipboard", Desc = "Copies the whole config as text", MiniButton = false, Callback = function() Window:ExportConfig() end})
+            local importBox = Tab:Textbox({Name = "Paste Config", Placeholder = "Paste text here", NoFlag = true})
+            Tab:Button({Name = "Import Config", Desc = "Applies the pasted text", MiniButton = false, Callback = function() Window:ImportConfig(importBox:Get()) end})
+            Tab:Button({Name = "Reset Window Position", MiniButton = false, Callback = function() Window:ResetPosition() end})
         end
     end
 
     -- Sub page (second interface with a Back button). Used by PageButton and by the profile.
     MakeSubPage = function(titleText, build)
-        local Sub = {}
+        local Sub = {Prefix = tostring(titleText or "Page")}
         local page = New("CanvasGroup", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, GroupTransparency = 1, Visible = false, ZIndex = 3, Parent = content})
         local back = New("TextButton", {Position = UDim2.fromOffset(2, 2), Size = UDim2.fromOffset(74, 26), BackgroundColor3 = T.Elem, Text = "< Back", Font = Font.GothamBold, TextSize = 12, TextColor3 = T.Text, AutoButtonColor = false, ZIndex = 4, Parent = page})
         Corner(back, 8)
@@ -2573,7 +2939,7 @@ function Library:CreateWindow(cfg)
 
     function Window:Tab(c)
         c = c or {}
-        local Tab = {Index = #Window.Tabs + 1}
+        local Tab = {Index = #Window.Tabs + 1, Prefix = tostring(c.Name or "Tab")}
         local btn = New("TextButton", {Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 4, Parent = sideScroll})
         Corner(btn, 8)
         local ic = New("ImageLabel", {BackgroundTransparency = 1, Position = UDim2.new(0, 10, 0.5, -9), Size = UDim2.fromOffset(18, 18), ImageColor3 = T.Sub, ZIndex = 5, Parent = btn})
@@ -2629,7 +2995,7 @@ function Library:CreateWindow(cfg)
                 New("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder, Parent = inner.Scroll})
                 New("UIPadding", {PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4), Parent = inner.Scroll})
             end
-            local IT = {Index = #inner.List + 1}
+            local IT = {Index = #inner.List + 1, Prefix = Tab.Prefix .. "/" .. tostring(ic.Name or "Tab")}
             IT.Btn = New("TextButton", {LayoutOrder = IT.Index, Size = UDim2.fromOffset(0, 24), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = T.Accent, BackgroundTransparency = 1, Text = ic.Name or "Tab", Font = Font.GothamBold, TextSize = 12, TextColor3 = T.Sub, AutoButtonColor = false, ZIndex = 6, Parent = inner.Scroll})
             Corner(IT.Btn, 7)
             New("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12), Parent = IT.Btn})
