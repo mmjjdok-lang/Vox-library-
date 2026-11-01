@@ -331,6 +331,243 @@ task.spawn(function()
     end)
 end)
 
+-- Skin backend (client side: only you can see these changes)
+local Skin = {Active = {}, Saved = {}, Conns = {}, Mats = {}}
+Library.Skin = Skin
+
+local function myHum()
+    local c = LP.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function torsoOf(c)
+    return c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso") or c:FindFirstChild("HumanoidRootPart")
+end
+
+local function tagged(inst, name)
+    inst:SetAttribute("VOXFx", name)
+    return inst
+end
+
+local function clearFx(c, name)
+    if Skin.Conns[name] then
+        Skin.Conns[name]:Disconnect()
+        Skin.Conns[name] = nil
+    end
+    if not c then return end
+    for _, d in ipairs(c:GetDescendants()) do
+        if d:GetAttribute("VOXFx") == name then d:Destroy() end
+    end
+end
+
+local function editDesc(mut)
+    local h = myHum()
+    if not h then return false end
+    return (pcall(function()
+        local d = h:GetAppliedDescription()
+        mut(d)
+        h:ApplyDescription(d)
+    end))
+end
+
+function Skin.Apply(desc)
+    local h = myHum()
+    if not h then return false end
+    return (pcall(function() h:ApplyDescription(desc) end))
+end
+
+Skin.Effects = {}
+Skin.Names = {}
+local function addFx(name, on, off)
+    Skin.Effects[name] = {On = on, Off = off or function(c) clearFx(c, name) end}
+    table.insert(Skin.Names, name)
+end
+
+addFx("Headless", function(c)
+    local h = myHum()
+    if h and Skin.Saved.Head == nil then pcall(function() Skin.Saved.Head = h:GetAppliedDescription().Head end) end
+    if editDesc(function(d) d.Head = 134082579 end) then return true end
+    local head = c:FindFirstChild("Head")
+    if not head then return false end
+    head.Transparency = 1
+    for _, f in ipairs(head:GetChildren()) do if f:IsA("Decal") then f.Transparency = 1 end end
+    return true
+end, function(c)
+    if Skin.Saved.Head ~= nil and editDesc(function(d) d.Head = Skin.Saved.Head end) then return end
+    local head = c:FindFirstChild("Head")
+    if head then
+        head.Transparency = 0
+        for _, f in ipairs(head:GetChildren()) do if f:IsA("Decal") then f.Transparency = 0 end end
+    end
+end)
+
+addFx("Korblox Leg", function(c)
+    local h = myHum()
+    if h and Skin.Saved.RightLeg == nil then pcall(function() Skin.Saved.RightLeg = h:GetAppliedDescription().RightLeg end) end
+    return editDesc(function(d) d.RightLeg = 139607718 end)
+end, function(c)
+    if Skin.Saved.RightLeg ~= nil then editDesc(function(d) d.RightLeg = Skin.Saved.RightLeg end) end
+end)
+
+addFx("Glow Aura", function(c)
+    clearFx(c, "Glow Aura")
+    local hl = tagged(Instance.new("Highlight"), "Glow Aura")
+    hl.FillColor = Library.Accent
+    hl.OutlineColor = WHITE
+    hl.FillTransparency = 0.65
+    hl.OutlineTransparency = 0.1
+    hl.Adornee = c
+    hl.Parent = c
+    return true
+end)
+
+addFx("Rainbow Glow", function(c)
+    clearFx(c, "Rainbow Glow")
+    local hl = tagged(Instance.new("Highlight"), "Rainbow Glow")
+    hl.FillTransparency = 0.6
+    hl.OutlineTransparency = 0
+    hl.Adornee = c
+    hl.Parent = c
+    Skin.Conns["Rainbow Glow"] = RS.Heartbeat:Connect(function()
+        local col = Color3.fromHSV((os.clock() * 0.25) % 1, 1, 1)
+        hl.FillColor = col
+        hl.OutlineColor = col
+    end)
+    return true
+end)
+
+addFx("Fire Aura", function(c)
+    clearFx(c, "Fire Aura")
+    local t = torsoOf(c)
+    if not t then return false end
+    local f = tagged(Instance.new("Fire"), "Fire Aura")
+    f.Color = Color3.fromRGB(255, 110, 0)
+    f.SecondaryColor = Color3.fromRGB(255, 220, 60)
+    f.Size = 9
+    f.Heat = 9
+    f.Parent = t
+    return true
+end)
+
+addFx("Sparkle Aura", function(c)
+    clearFx(c, "Sparkle Aura")
+    local t = torsoOf(c)
+    if not t then return false end
+    local s = tagged(Instance.new("Sparkles"), "Sparkle Aura")
+    s.SparkleColor = Library.Accent
+    s.Parent = t
+    return true
+end)
+
+addFx("Smoke Aura", function(c)
+    clearFx(c, "Smoke Aura")
+    local t = torsoOf(c)
+    if not t then return false end
+    local s = tagged(Instance.new("Smoke"), "Smoke Aura")
+    s.Color = Color3.fromRGB(170, 175, 190)
+    s.Opacity = 0.35
+    s.Size = 5
+    s.RiseVelocity = 2
+    s.Parent = t
+    return true
+end)
+
+addFx("Head Halo", function(c)
+    clearFx(c, "Head Halo")
+    local head = c:FindFirstChild("Head")
+    if not head then return false end
+    local ring = tagged(Instance.new("Part"), "Head Halo")
+    ring.Shape = Enum.PartType.Cylinder
+    ring.Size = Vector3.new(0.12, 2.2, 2.2)
+    ring.Material = Enum.Material.Neon
+    ring.Color = Library.Accent
+    ring.CanCollide = false
+    ring.CanQuery = false
+    ring.CanTouch = false
+    ring.Massless = true
+    ring.CFrame = head.CFrame * CFrame.new(0, 1.4, 0) * CFrame.Angles(0, 0, math.rad(90))
+    ring.Parent = c
+    local w = Instance.new("WeldConstraint")
+    w.Part0 = head
+    w.Part1 = ring
+    w.Parent = ring
+    return true
+end)
+
+addFx("Head Particles", function(c)
+    clearFx(c, "Head Particles")
+    local head = c:FindFirstChild("Head")
+    if not head then return false end
+    local pe = tagged(Instance.new("ParticleEmitter"), "Head Particles")
+    pe.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+    pe.Rate = 20
+    pe.Lifetime = NumberRange.new(1, 2)
+    pe.Speed = NumberRange.new(1, 3)
+    pe.SpreadAngle = Vector2.new(180, 180)
+    pe.Size = NumberSequence.new(0.45)
+    pe.LightEmission = 1
+    pe.Color = ColorSequence.new(Library.Accent, WHITE)
+    pe.Parent = head
+    return true
+end)
+
+addFx("Neon Body", function(c)
+    for _, p in ipairs(c:GetDescendants()) do
+        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" and not p:GetAttribute("VOXFx") then
+            if Skin.Mats[p] == nil then Skin.Mats[p] = p.Material end
+            p.Material = Enum.Material.Neon
+        end
+    end
+    return true
+end, function(c)
+    for p, m in pairs(Skin.Mats) do
+        if p.Parent then p.Material = m end
+        Skin.Mats[p] = nil
+    end
+end)
+
+function Skin.Set(name, on)
+    local fx = Skin.Effects[name]
+    if not fx then return false end
+    Skin.Active[name] = on and true or nil
+    local c = LP.Character
+    if not c then
+        if on then Skin.Active[name] = nil end
+        return false
+    end
+    if on then
+        local ok, res = pcall(fx.On, c)
+        local good = ok and res ~= false
+        if not good then Skin.Active[name] = nil end
+        return good
+    end
+    pcall(fx.Off, c)
+    return true
+end
+
+function Skin.Reapply()
+    local c = LP.Character
+    if not c then return end
+    for name in pairs(Skin.Active) do pcall(Skin.Effects[name].On, c) end
+end
+
+function Skin.SetColor(col)
+    Skin.Color = col
+    local c = LP.Character
+    if not c then return end
+    local bc = c:FindFirstChildOfClass("BodyColors")
+    if not bc then
+        bc = Instance.new("BodyColors")
+        bc.Parent = c
+    end
+    bc.HeadColor3 = col
+    bc.TorsoColor3 = col
+    bc.LeftArmColor3 = col
+    bc.RightArmColor3 = col
+    bc.LeftLegColor3 = col
+    bc.RightLegColor3 = col
+end
+
 -- Notify
 local NotifyPos = {
     TopRight = {Vector2.new(1, 0), UDim2.new(1, -12, 0, 12), Enum.VerticalAlignment.Top, Enum.HorizontalAlignment.Right, UDim2.new(1.2, 0, 0, 0)},
@@ -1071,7 +1308,7 @@ function Library:CreateWindow(cfg)
         return obj
     end
 
-    local function OpenPicker(default, cb)
+    local function OpenPicker(default, cb, onCancel)
         local panel, close = OpenPopup(280, 250)
         local h, s, v = default:ToHSV()
         local orig = default
@@ -1146,7 +1383,7 @@ function Library:CreateWindow(cfg)
             b.MouseLeave:Connect(function() Tween(bs, 0.2, {Scale = 1}) end)
             b.MouseButton1Click:Connect(fn)
         end
-        pbtn("Cancel", 12, 120, false, function() if cb then pcall(cb, orig) end close() end)
+        pbtn("Cancel", 12, 120, false, function() if onCancel then pcall(onCancel) elseif cb then pcall(cb, orig) end close() end)
         pbtn("Done", 148, 120, true, close)
         update(false)
     end
@@ -1162,12 +1399,16 @@ function Library:CreateWindow(cfg)
         return math.clamp(tonumber(a), 30, 300), math.clamp(tonumber(b), 30, 300)
     end
 
-    -- builds a floating button. o = {Name, W, H, Transparency, Color}
+    -- builds a floating button. o = {Name, W, H, Transparency, Color, Colors, Thickness, Speed, Strength}
     local function BuildFloat(parent, o, toggle)
+        o.Thickness = o.Thickness or 2.5
+        o.Speed = o.Speed or 60
+        o.Strength = o.Strength or 1
         local holder = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(o.W, o.H), BackgroundTransparency = 1, Parent = parent})
         local b = New("TextButton", {Name = "VOX_Float", Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Dark, BackgroundTransparency = o.Transparency, Text = "", AutoButtonColor = false, ZIndex = 5, NoSound = true, Parent = holder})
         Corner(b, 14)
-        local st = Stroke(b, o.Color, 2.5, 0)
+        local st = Stroke(b, WHITE, o.Thickness, 0)
+        local grad = New("UIGradient", {Parent = st})
         local nameL = New("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromScale(0, toggle and -0.08 or 0), Size = UDim2.fromScale(1, 1), Font = Font.GothamBold, Text = o.Name, TextSize = 12, TextColor3 = WHITE, TextWrapped = true, Parent = b})
         local stateL
         if toggle then
@@ -1176,18 +1417,45 @@ function Library:CreateWindow(cfg)
         local function apply()
             holder.Size = UDim2.fromOffset(o.W, o.H)
             b.BackgroundTransparency = o.Transparency
-            st.Color = o.Color
             nameL.Text = o.Name
+            st.Thickness = o.Thickness
+            st.Transparency = 1 - math.clamp(o.Strength, 0.05, 1)
+            local cols = o.Colors
+            if cols and #cols >= 2 then
+                local n = #cols
+                local kps = {}
+                for i = 1, n + 1 do
+                    kps[i] = ColorSequenceKeypoint.new((i - 1) / n, cols[(i - 1) % n + 1])
+                end
+                grad.Color = ColorSequence.new(kps)
+            else
+                grad.Color = ColorSequence.new(o.Color)
+            end
         end
+        apply()
+        local rot = 0
+        local rc
+        rc = RS.RenderStepped:Connect(function(dt)
+            if not holder:IsDescendantOf(game) then rc:Disconnect() return end
+            rot = (rot + dt * o.Speed) % 360
+            grad.Rotation = rot
+        end)
         return holder, b, st, stateL, apply
     end
 
     local function OpenFloatPanel(info)
         local panel, close = OpenPopup(470, 296)
-        local opts = {Name = info.Name, W = 56, H = 56, Transparency = 0.1, Color = T.Accent}
+        local opts = {Name = info.Name, W = 56, H = 56, Transparency = 0.1, Color = T.Accent, Thickness = 2.5, Speed = 60, Strength = 1, Colors = {}}
+        local function syncColors()
+            local list = {opts.Color}
+            if opts.G2 then table.insert(list, opts.G2) end
+            if opts.G3 then table.insert(list, opts.G3) end
+            opts.Colors = list
+        end
+        syncColors()
         PLabel(panel, info.Toggle and "Floating Toggle" or "Floating Button", 14, 10, 300, 20, Left, 14, T.Text, Font.GothamBlack)
 
-        -- preview square (shows the real button shape; every change updates it live)
+        -- preview square (shows the real button; every change updates it live)
         local area = New("Frame", {Position = UDim2.fromOffset(14, 40), Size = UDim2.fromOffset(172, 190), BackgroundColor3 = T.Elem, BorderSizePixel = 0, ClipsDescendants = true, Parent = panel})
         Corner(area, 12)
         Stroke(area, T.Accent, 2, 0.1)
@@ -1197,14 +1465,20 @@ function Library:CreateWindow(cfg)
         local pvScale = New("UIScale", {Parent = pvHolder})
         local cap = PLabel(area, "56 x 56", 0, 168, 172, 16, Center, 12, T.Accent, Font.GothamBold)
         local function refresh()
+            syncColors()
             pvApply()
             pvScale.Scale = math.min(1, 150 / opts.W, 110 / opts.H)
             cap.Text = opts.W .. " x " .. opts.H
         end
         refresh()
 
-        PLabel(panel, "Name", 200, 44, 60, 28, Left, 12, T.Sub)
-        local nb = New("TextBox", {Position = UDim2.fromOffset(262, 44), Size = UDim2.fromOffset(194, 28), BackgroundColor3 = T.Elem, Text = opts.Name, PlaceholderText = "Button name", TextColor3 = T.Text, PlaceholderColor3 = T.Sub, Font = Font.GothamMedium, TextSize = 12, ClearTextOnFocus = false, Parent = panel})
+        local pageSize = UDim2.fromOffset(256, 196)
+        local colMain = New("CanvasGroup", {Position = UDim2.fromOffset(200, 40), Size = pageSize, BackgroundTransparency = 1, Parent = panel})
+        local colBorder = New("CanvasGroup", {Position = UDim2.fromOffset(240, 40), Size = pageSize, BackgroundTransparency = 1, GroupTransparency = 1, Visible = false, Parent = panel})
+
+        -- ===== main page =====
+        PLabel(colMain, "Name", 0, 4, 60, 28, Left, 12, T.Sub)
+        local nb = New("TextBox", {Position = UDim2.fromOffset(62, 4), Size = UDim2.fromOffset(194, 28), BackgroundColor3 = T.Elem, Text = opts.Name, PlaceholderText = "Button name", TextColor3 = T.Text, PlaceholderColor3 = T.Sub, Font = Font.GothamMedium, TextSize = 12, ClearTextOnFocus = false, Parent = colMain})
         Corner(nb, 6)
         local nst = Stroke(nb, T.Accent, 1.5, 0.2)
         nb.Focused:Connect(function() Tween(nst, 0.2, {Transparency = 0}) end)
@@ -1214,8 +1488,8 @@ function Library:CreateWindow(cfg)
             refresh()
         end)
 
-        PLabel(panel, "Size  (WxH)", 200, 84, 120, 28, Left, 12, T.Sub)
-        local sb = New("TextBox", {AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromOffset(456, 84), Size = UDim2.fromOffset(110, 28), BackgroundColor3 = T.Elem, Text = "56x56", PlaceholderText = "123x123", TextColor3 = T.Text, PlaceholderColor3 = T.Sub, Font = Font.GothamBold, TextSize = 13, ClearTextOnFocus = false, Parent = panel})
+        PLabel(colMain, "Size  (WxH)", 0, 44, 120, 28, Left, 12, T.Sub)
+        local sb = New("TextBox", {AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromOffset(256, 44), Size = UDim2.fromOffset(110, 28), BackgroundColor3 = T.Elem, Text = "56x56", PlaceholderText = "123x123", TextColor3 = T.Text, PlaceholderColor3 = T.Sub, Font = Font.GothamBold, TextSize = 13, ClearTextOnFocus = false, Parent = colMain})
         Corner(sb, 6)
         local sbst = Stroke(sb, T.Accent, 1.5, 0.2)
         sb.Focused:Connect(function() Tween(sbst, 0.2, {Transparency = 0}) end)
@@ -1232,16 +1506,93 @@ function Library:CreateWindow(cfg)
             refresh()
         end)
 
-        PLabel(panel, "Transparency", 200, 124, 120, 18, Left, 12, T.Sub)
-        local sl2 = PLabel(panel, "0.1", 396, 124, 60, 18, Right, 12, T.Accent)
-        local h2 = New("Frame", {Position = UDim2.fromOffset(200, 148), Size = UDim2.fromOffset(256, 18), BackgroundTransparency = 1, Parent = panel})
+        PLabel(colMain, "Transparency", 0, 84, 120, 18, Left, 12, T.Sub)
+        local sl2 = PLabel(colMain, "0.1", 196, 84, 60, 18, Right, 12, T.Accent)
+        local h2 = New("Frame", {Position = UDim2.fromOffset(0, 108), Size = UDim2.fromOffset(256, 18), BackgroundTransparency = 1, Parent = colMain})
         MakeSlider(h2, 0, 0.9, 0.1, 0.05, function(v) opts.Transparency = v refresh() end, sl2)
 
-        PLabel(panel, "Border Color", 200, 180, 120, 24, Left, 12, T.Sub)
-        local sw = New("TextButton", {AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromOffset(456, 180), Size = UDim2.fromOffset(60, 24), BackgroundColor3 = opts.Color, Text = "", AutoButtonColor = false, Parent = panel})
-        Corner(sw, 6)
-        Stroke(sw, WHITE, 1.5, 0.3)
-        sw.MouseButton1Click:Connect(function() OpenPicker(opts.Color, function(c) opts.Color = c sw.BackgroundColor3 = c refresh() end) end)
+        local goBorder = New("TextButton", {Position = UDim2.fromOffset(0, 142), Size = UDim2.fromOffset(256, 34), BackgroundColor3 = T.Accent, Text = "Border & Gradient   >", Font = Font.GothamBlack, TextSize = 13, TextColor3 = (0.299 * T.Accent.R + 0.587 * T.Accent.G + 0.114 * T.Accent.B) > 0.6 and BLACK or WHITE, AutoButtonColor = false, Parent = colMain})
+        Corner(goBorder, 8)
+        Stroke(goBorder, WHITE, 1.5, 0.5)
+
+        -- ===== border page =====
+        local function lum(c) return 0.299 * c.R + 0.587 * c.G + 0.114 * c.B end
+        local back = New("TextButton", {Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(62, 22), BackgroundColor3 = T.Elem, Text = "< Back", Font = Font.GothamBold, TextSize = 11, TextColor3 = T.Text, AutoButtonColor = false, Parent = colBorder})
+        Corner(back, 6)
+        Stroke(back, T.Accent, 1.5, 0.2)
+        PLabel(colBorder, "BORDER", 70, 0, 186, 22, Left, 12, T.Accent, Font.GothamBlack)
+
+        local paints = {}
+        local function paintAll() for _, fn in ipairs(paints) do fn() end end
+        local function getSlot(i) return (i == 1 and opts.Color) or (i == 2 and opts.G2) or opts.G3 end
+        local function setSlot(i, c)
+            if i == 1 then opts.Color = c or opts.Color elseif i == 2 then opts.G2 = c else opts.G3 = c end
+        end
+        local function slotBtn(idx, x)
+            local b = New("TextButton", {Position = UDim2.fromOffset(x, 30), Size = UDim2.fromOffset(58, 30), BackgroundColor3 = T.Elem, Text = "", AutoButtonColor = false, Parent = colBorder})
+            Corner(b, 8)
+            Stroke(b, T.Accent, 1.5, 0.15)
+            local lab = New("TextLabel", {BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Font = Font.GothamBlack, TextSize = 11, Text = "", TextColor3 = WHITE, Parent = b})
+            table.insert(paints, function()
+                local col = getSlot(idx)
+                if col then
+                    b.BackgroundColor3 = col
+                    lab.Text = "Color " .. idx
+                    lab.TextColor3 = lum(col) > 0.6 and BLACK or WHITE
+                else
+                    b.BackgroundColor3 = T.Elem
+                    lab.Text = "+ Color " .. idx
+                    lab.TextColor3 = T.Sub
+                end
+            end)
+            b.MouseButton1Click:Connect(function()
+                local was = getSlot(idx)
+                local start = was or opts.G2 or opts.Color
+                OpenPicker(start, function(c)
+                    setSlot(idx, c)
+                    paintAll()
+                    refresh()
+                end, function()
+                    setSlot(idx, was)
+                    paintAll()
+                    refresh()
+                end)
+            end)
+        end
+        slotBtn(1, 0)
+        slotBtn(2, 66)
+        slotBtn(3, 132)
+        local reset = New("TextButton", {Position = UDim2.fromOffset(198, 30), Size = UDim2.fromOffset(58, 30), BackgroundColor3 = T.Dark, Text = "Reset", Font = Font.GothamBlack, TextSize = 11, TextColor3 = T.Text, AutoButtonColor = false, Parent = colBorder})
+        Corner(reset, 8)
+        Stroke(reset, T.Accent, 1.5, 0.15)
+        reset.MouseButton1Click:Connect(function()
+            opts.G2, opts.G3 = nil, nil
+            paintAll()
+            refresh()
+        end)
+        paintAll()
+
+        local function sliderRow(label, y, min, max, def, inc, key)
+            PLabel(colBorder, label, 0, y, 150, 16, Left, 12, T.Sub)
+            local vl = PLabel(colBorder, tostring(def), 196, y, 60, 16, Right, 12, T.Accent)
+            local hh = New("Frame", {Position = UDim2.fromOffset(0, y + 18), Size = UDim2.fromOffset(256, 16), BackgroundTransparency = 1, Parent = colBorder})
+            MakeSlider(hh, min, max, def, inc, function(v) opts[key] = v refresh() end, vl)
+        end
+        sliderRow("Border size", 70, 1, 10, 2.5, 0.5, "Thickness")
+        sliderRow("Gradient speed", 108, 0, 360, 60, 5, "Speed")
+        sliderRow("Gradient strength", 146, 0.1, 1, 1, 0.05, "Strength")
+
+        local function showBorder(v)
+            local from, to = v and colMain or colBorder, v and colBorder or colMain
+            Tween(from, 0.2, {GroupTransparency = 1, Position = UDim2.fromOffset(v and 160 or 240, 40)})
+            task.delay(0.2, function() from.Visible = false end)
+            to.Position = UDim2.fromOffset(v and 240 or 160, 40)
+            to.GroupTransparency = 1
+            to.Visible = true
+            Tween(to, 0.35, {GroupTransparency = 0, Position = UDim2.fromOffset(200, 40)}, Enum.EasingStyle.Back)
+        end
+        goBorder.MouseButton1Click:Connect(function() showBorder(true) end)
+        back.MouseButton1Click:Connect(function() showBorder(false) end)
 
         local function pbtn(text, x, w, filled, fn)
             local b = New("TextButton", {Position = UDim2.fromOffset(x, 246), Size = UDim2.fromOffset(w, 36), BackgroundColor3 = T.Accent, BackgroundTransparency = filled and 0 or 0.55, Text = text, Font = Font.GothamBlack, TextSize = 12, TextColor3 = filled and BLACK or T.Text, TextWrapped = true, AutoButtonColor = false, Parent = panel})
@@ -1256,18 +1607,20 @@ function Library:CreateWindow(cfg)
         pbtn("Exit + Add Button", 242, 214, true, function()
             local w, h = ParseSize(sb.Text)
             if w then opts.W, opts.H = w, h end
+            syncColors()
             close()
-            Window:SpawnFloat(info, {Name = opts.Name, W = opts.W, H = opts.H, Transparency = opts.Transparency, Color = opts.Color})
+            Window:SpawnFloat(info, {Name = opts.Name, W = opts.W, H = opts.H, Transparency = opts.Transparency, Color = opts.Color, Colors = opts.Colors, Thickness = opts.Thickness, Speed = opts.Speed, Strength = opts.Strength})
             Window:SetVisible(false)
         end)
     end
 
     function Window:SpawnFloat(info, o)
         if Window.Floats[info] then Window.Floats[info]:Destroy() end
-        o = {Name = o.Name or info.Name, W = o.W or o.Size or 56, H = o.H or o.Size or 56, Transparency = o.Transparency or 0.1, Color = o.Color or T.Accent}
+        o = {Name = o.Name or info.Name, W = o.W or o.Size or 56, H = o.H or o.Size or 56, Transparency = o.Transparency or 0.1, Color = o.Color or T.Accent, Colors = o.Colors, Thickness = o.Thickness or 2.5, Speed = o.Speed or 60, Strength = o.Strength or 1}
         local holder, b, st, stateL = BuildFloat(Gui, o, info.Toggle)
         holder.Position = UDim2.new(0.5, 0, 0.3, 0)
         local norm = UDim2.fromOffset(o.W, o.H)
+        local th = o.Thickness
         local sc = New("UIScale", {Scale = 0, Parent = holder})
         Tween(sc, 0.6, {Scale = 1}, Enum.EasingStyle.Elastic)
 
@@ -1280,13 +1633,13 @@ function Library:CreateWindow(cfg)
                 local mid = UDim2.fromOffset(o.W * 1.08, o.H * 1.08)
                 local sine = Enum.EasingStyle.Sine
                 while alive and on do
-                    Tween(holder, 0.12, {Size = big}, sine) Tween(st, 0.12, {Thickness = 5}, sine) task.wait(0.13)
-                    Tween(holder, 0.1, {Size = norm}, sine) Tween(st, 0.1, {Thickness = 2.5}, sine) task.wait(0.11)
-                    Tween(holder, 0.1, {Size = mid}, sine) Tween(st, 0.1, {Thickness = 4}, sine) task.wait(0.11)
-                    Tween(holder, 0.2, {Size = norm}, sine) Tween(st, 0.2, {Thickness = 2.5}, sine) task.wait(0.7)
+                    Tween(holder, 0.12, {Size = big}, sine) Tween(st, 0.12, {Thickness = th * 2}, sine) task.wait(0.13)
+                    Tween(holder, 0.1, {Size = norm}, sine) Tween(st, 0.1, {Thickness = th}, sine) task.wait(0.11)
+                    Tween(holder, 0.1, {Size = mid}, sine) Tween(st, 0.1, {Thickness = th * 1.6}, sine) task.wait(0.11)
+                    Tween(holder, 0.2, {Size = norm}, sine) Tween(st, 0.2, {Thickness = th}, sine) task.wait(0.7)
                 end
                 pulsing = false
-                if alive then Tween(holder, 0.25, {Size = norm}, Enum.EasingStyle.Back) Tween(st, 0.25, {Thickness = 2.5}) end
+                if alive then Tween(holder, 0.25, {Size = norm}, Enum.EasingStyle.Back) Tween(st, 0.25, {Thickness = th}) end
             end)
         end
         if info.Listen then
@@ -1320,6 +1673,282 @@ function Library:CreateWindow(cfg)
             end
         end})
         Window.Floats[info] = obj
+    end
+
+    -- Skin page: big viewport square (drag to spin), skin color, load skin by ID, effects list
+    local function BuildSkinPage(P)
+        local Skin = Library.Skin
+        pcall(function()
+            local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+            if h and not Skin.OrigDesc then Skin.OrigDesc = h:GetAppliedDescription() end
+        end)
+        P:Note({Title = "Skin", Text = "Drag the square to spin your skin. Changes are client-side: you see them, other players do not.", Color = "Sky"})
+        local area = P:Frame(236)
+
+        local sq = New("Frame", {Position = UDim2.fromOffset(0, 6), Size = UDim2.fromOffset(216, 216), BackgroundColor3 = T.Dark, BorderSizePixel = 0, ClipsDescendants = true, Parent = area})
+        Corner(sq, 14)
+        local sqs = Stroke(sq, T.Accent, 2, 0.1)
+        Reg(function() sq.BackgroundColor3 = T.Dark sqs.Color = T.Accent end)
+        local vp = New("ViewportFrame", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Ambient = Color3.fromRGB(190, 190, 200), LightColor = WHITE, LightDirection = Vector3.new(-0.4, -0.6, -0.7), Parent = sq})
+        Corner(vp, 14)
+        local cam = Instance.new("Camera")
+        cam.FieldOfView = 45
+        cam.Parent = vp
+        vp.CurrentCamera = cam
+
+        local model, center = nil, Vector3.new(0, 2.5, 0)
+        local yaw, pitch, dist, spin = math.pi, 0.1, 9, true
+        local dragging, lastPos
+
+        local function setModel(m)
+            if model then model:Destroy() model = nil end
+            if not m then return end
+            for _, d in ipairs(m:GetDescendants()) do
+                if d:IsA("BaseScript") or d:IsA("Sound") or d:IsA("Humanoid") or d:GetAttribute("VOXFx") then
+                    d:Destroy()
+                elseif d:IsA("Motor6D") then
+                    pcall(function() d.Transform = CFrame.new() end)
+                end
+            end
+            pcall(function() m:PivotTo(CFrame.new(0, 0, 0)) end)
+            m.Parent = vp
+            model = m
+            pcall(function()
+                local cf, size = m:GetBoundingBox()
+                center = cf.Position
+                dist = math.clamp(size.Y * 1.6 + 2, 6, 24)
+            end)
+        end
+        local function refreshPreview()
+            local c = LP.Character
+            if not c then return end
+            local ok, m = pcall(function()
+                local was = c.Archivable
+                c.Archivable = true
+                local cl = c:Clone()
+                c.Archivable = was
+                return cl
+            end)
+            if ok and m then setModel(m) end
+        end
+
+        local last = os.clock()
+        WConn(RS.RenderStepped, function()
+            local now = os.clock()
+            local dt = now - last
+            last = now
+            if spin and not dragging then yaw = yaw + dt * 0.6 end
+            cam.CFrame = CFrame.new(center) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(-pitch, 0, 0) * CFrame.new(0, 0, dist)
+        end)
+
+        local hit = New("TextButton", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", ZIndex = 5, NoSound = true, Parent = sq})
+        hit.InputBegan:Connect(function(input)
+            if dragging then return end
+            local t = input.UserInputType
+            if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+                dragging, lastPos = input, input.Position
+                if P.Scroll then P.Scroll.ScrollingEnabled = false end
+            end
+        end)
+        Conn(UIS.InputChanged, function(input)
+            if not dragging then return end
+            if input == dragging or (dragging.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseMovement) then
+                local d = input.Position - lastPos
+                lastPos = input.Position
+                yaw = yaw - d.X * 0.012
+                pitch = math.clamp(pitch + d.Y * 0.008, -1.2, 1.2)
+            end
+        end)
+        Conn(UIS.InputEnded, function(input)
+            if dragging and (input == dragging or (input.UserInputType == Enum.UserInputType.MouseButton1 and dragging.UserInputType == Enum.UserInputType.MouseButton1)) then
+                dragging = nil
+                if P.Scroll then P.Scroll.ScrollingEnabled = true end
+            end
+        end)
+
+        local function tiny(text, x, y, w, fn)
+            local b = New("TextButton", {AnchorPoint = Vector2.new(x < 0 and 1 or 0, 0), Position = UDim2.new(x < 0 and 1 or 0, x < 0 and x or x, 0, y), Size = UDim2.fromOffset(w, 22), BackgroundColor3 = T.Dark, BackgroundTransparency = 0.2, Text = text, Font = Font.GothamBlack, TextSize = 11, TextColor3 = WHITE, AutoButtonColor = false, ZIndex = 7, Parent = sq})
+            Corner(b, 6)
+            Stroke(b, T.Accent, 1, 0.3)
+            b.MouseButton1Click:Connect(function() fn(b) end)
+            return b
+        end
+        tiny("SPIN", -8, 8, 44, function(b)
+            spin = not spin
+            b.TextColor3 = spin and WHITE or T.Sub
+        end)
+        tiny("+", 8, 186, 24, function() dist = math.clamp(dist - 1.5, 4, 24) end)
+        tiny("-", 38, 186, 24, function() dist = math.clamp(dist + 1.5, 4, 24) end)
+
+        -- real loading overlay
+        local ov = New("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = BLACK, BackgroundTransparency = 0.3, Visible = false, Active = true, ZIndex = 9, Parent = sq})
+        local ring = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.38, 0), Size = UDim2.fromOffset(48, 48), BackgroundTransparency = 1, ZIndex = 10, Parent = ov})
+        Corner(ring, 999)
+        local rs = New("UIStroke", {Color = T.Accent, Thickness = 4, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = ring})
+        local rg = New("UIGradient", {Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.6, 1), NumberSequenceKeypoint.new(1, 1)}), Parent = rs})
+        Reg(function() rs.Color = T.Accent end)
+        local lt = New("TextLabel", {BackgroundTransparency = 1, Position = UDim2.new(0, 8, 0.58, 0), Size = UDim2.new(1, -16, 0, 32), Font = Font.GothamBold, Text = "Loading...", TextSize = 12, TextColor3 = WHITE, TextWrapped = true, ZIndex = 10, Parent = ov})
+        local track = New("Frame", {AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0.76, 0), Size = UDim2.new(1, -40, 0, 8), BackgroundColor3 = WHITE, BackgroundTransparency = 0.8, BorderSizePixel = 0, ZIndex = 10, Parent = ov})
+        Corner(track, 4)
+        local fill = New("Frame", {Size = UDim2.fromScale(0, 1), BackgroundColor3 = T.Accent, BorderSizePixel = 0, ZIndex = 11, Parent = track})
+        Corner(fill, 4)
+        Reg(function() fill.BackgroundColor3 = T.Accent end)
+        local pctL = New("TextLabel", {BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0.84, 0), Size = UDim2.fromOffset(80, 16), Font = Font.GothamBlack, Text = "0%", TextSize = 12, TextColor3 = T.Accent, ZIndex = 10, Parent = ov})
+        Reg(function() pctL.TextColor3 = T.Accent end)
+        local shown, goal = 0, 0
+        WConn(RS.Heartbeat, function(dt)
+            if not ov.Visible then return end
+            rg.Rotation = (rg.Rotation + dt * 360) % 360
+            shown = shown + (goal - shown) * math.min(1, dt * 4)
+            fill.Size = UDim2.fromScale(math.clamp(shown, 0, 1), 1)
+            pctL.Text = math.floor(shown * 100 + 0.5) .. "%"
+        end)
+        local function step(g, text) goal = g lt.Text = text end
+        local function showLoad(v)
+            ov.Visible = v
+            if v then shown, goal = 0, 0 fill.Size = UDim2.fromScale(0, 1) end
+        end
+
+        local function defaultColor()
+            local c = LP.Character
+            local head = c and c:FindFirstChild("Head")
+            return head and head.Color or Color3.fromRGB(234, 184, 146)
+        end
+
+        local function rcBtn(text, y, h)
+            local b = New("TextButton", {Position = UDim2.new(0, 226, 0, y), Size = UDim2.new(1, -230, 0, h or 34), BackgroundColor3 = T.Elem, Text = text, Font = Font.GothamBold, TextSize = 12, TextColor3 = T.Text, AutoButtonColor = false, Parent = area})
+            Corner(b, 8)
+            local s = Stroke(b, T.Accent, 1.5, 0.15)
+            Reg(function() b.BackgroundColor3 = T.Elem s.Color = T.Accent end)
+            b.MouseEnter:Connect(function() Tween(s, 0.2, {Transparency = 0}) end)
+            b.MouseLeave:Connect(function() Tween(s, 0.2, {Transparency = 0.15}) end)
+            return b
+        end
+
+        -- skin color (right of the square)
+        local colBtn = rcBtn("Skin Color", 6)
+        colBtn.TextXAlignment = Left
+        New("UIPadding", {PaddingLeft = UDim.new(0, 10), Parent = colBtn})
+        local sw = New("Frame", {AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.fromOffset(30, 18), BackgroundColor3 = Skin.Color or defaultColor(), BorderSizePixel = 0, Parent = colBtn})
+        Corner(sw, 5)
+        Stroke(sw, WHITE, 1, 0.5)
+        colBtn.MouseButton1Click:Connect(function()
+            OpenPicker(Skin.Color or defaultColor(), function(c)
+                sw.BackgroundColor3 = c
+                Skin.SetColor(c)
+                if model then
+                    local bc = model:FindFirstChildOfClass("BodyColors")
+                    if bc then
+                        bc.HeadColor3, bc.TorsoColor3 = c, c
+                        bc.LeftArmColor3, bc.RightArmColor3 = c, c
+                        bc.LeftLegColor3, bc.RightLegColor3 = c, c
+                    end
+                end
+            end)
+        end)
+
+        -- user id + real loading
+        local idBox = New("TextBox", {Position = UDim2.new(0, 226, 0, 48), Size = UDim2.new(1, -230, 0, 30), BackgroundColor3 = T.Dark, PlaceholderText = "User ID...", PlaceholderColor3 = T.Sub, Text = "", TextColor3 = T.Text, Font = Font.GothamBold, TextSize = 12, ClearTextOnFocus = false, Parent = area})
+        Corner(idBox, 8)
+        local idst = Stroke(idBox, T.Accent, 1.5, 0.2)
+        idBox.Focused:Connect(function() Tween(idst, 0.2, {Transparency = 0}) end)
+        idBox.FocusLost:Connect(function() Tween(idst, 0.2, {Transparency = 0.2}) end)
+
+        local dd
+        local busy = false
+        local function loadSkin(txt)
+            if busy then return end
+            local id = tonumber(((txt or ""):gsub("[^%d]", "")))
+            if not id then
+                Library:Notify({Title = "Skin", Message = "Type a valid user ID", Color = "Red", Time = 3})
+                return
+            end
+            busy = true
+            task.spawn(function()
+                showLoad(true)
+                step(0.1, "Looking up the player...")
+                local okN, uname = pcall(function() return Players:GetNameFromUserIdAsync(id) end)
+                if not okN then
+                    showLoad(false)
+                    busy = false
+                    Library:Notify({Title = "Skin", Message = "No account found for that ID", Color = "Red", Time = 3})
+                    return
+                end
+                step(0.4, "Downloading " .. uname .. "'s outfit...")
+                local okD, desc = pcall(function() return Players:GetHumanoidDescriptionFromUserId(id) end)
+                if not okD or not desc then
+                    showLoad(false)
+                    busy = false
+                    Library:Notify({Title = "Skin", Message = "Could not load that outfit", Color = "Red", Time = 3})
+                    return
+                end
+                step(0.6, "Building the preview...")
+                local rigType = Enum.HumanoidRigType.R15
+                pcall(function() rigType = LP.Character:FindFirstChildOfClass("Humanoid").RigType end)
+                local okR, rig = pcall(function() return Players:CreateHumanoidModelFromDescription(desc, rigType) end)
+                if okR and rig then setModel(rig) end
+                step(0.85, "Applying to your character...")
+                local applied = Skin.Apply(desc)
+                if applied then
+                    Skin.Color = nil
+                    task.wait(0.5)
+                    Skin.Reapply()
+                    refreshPreview()
+                end
+                step(1, applied and "Done!" or "Preview only")
+                task.wait(0.5)
+                showLoad(false)
+                busy = false
+                if applied then
+                    Library:Notify({Title = "Skin", Message = uname .. "'s skin applied", Time = 3})
+                else
+                    Library:Notify({Title = "Skin", Message = "The game blocked changing your character. Showing a preview only.", Color = "Orange", Time = 4})
+                end
+            end)
+        end
+        idBox.FocusLost:Connect(function(enter)
+            idBox.Text = (idBox.Text:gsub("[^%d]", ""))
+            if enter then loadSkin(idBox.Text) end
+        end)
+        local loadBtn = rcBtn("Load Skin", 84)
+        loadBtn.MouseButton1Click:Connect(function() loadSkin(idBox.Text) end)
+
+        local resetBtn = rcBtn("Reset Skin", 124)
+        resetBtn.MouseButton1Click:Connect(function()
+            task.spawn(function()
+                for n in pairs(Skin.Active) do Skin.Set(n, false) end
+                if dd then dd:Set({}) end
+                if Skin.OrigDesc then Skin.Apply(Skin.OrigDesc) end
+                Skin.Color = nil
+                task.wait(0.6)
+                refreshPreview()
+            end)
+        end)
+        New("TextLabel", {BackgroundTransparency = 1, Position = UDim2.new(0, 226, 0, 168), Size = UDim2.new(1, -230, 0, 40), Font = Font.Gotham, Text = "Drag the square to rotate. SPIN toggles auto rotate.", TextSize = 10, TextColor3 = T.Sub, TextWrapped = true, TextXAlignment = Left, TextYAlignment = Enum.TextYAlignment.Top, Parent = area})
+
+        -- add items (effects list)
+        dd = P:Dropdown({Name = "Add Items", Desc = "Headless, Korblox, auras and head effects", Options = Skin.Names, Multi = true, Callback = function(list)
+            local want = {}
+            for _, n in ipairs(list) do want[n] = true end
+            for _, n in ipairs(Skin.Names) do
+                local on = want[n] == true
+                if on ~= (Skin.Active[n] == true) then
+                    local ok = Skin.Set(n, on)
+                    if on and not ok then
+                        Library:Notify({Title = "Skin", Message = n .. " could not be applied here", Color = "Red", Time = 3})
+                    end
+                end
+            end
+            task.delay(0.6, refreshPreview)
+        end})
+
+        WConn(LP.CharacterAdded, function()
+            task.wait(1.5)
+            if Skin.Color then Skin.SetColor(Skin.Color) end
+            Skin.Reapply()
+            refreshPreview()
+        end)
+        refreshPreview()
     end
 
     local MakeSubPage
@@ -1522,6 +2151,27 @@ function Library:CreateWindow(cfg)
             Reg(function() arrow.TextColor3 = T.Accent end)
             Press(btn, sc, c.Sound)
             local Sub, openSub, closeSub = MakeSubPage(c.Name or "Page", build)
+            btn.MouseButton1Click:Connect(function()
+                openSub()
+                Tween(arrow, 0.15, {Position = UDim2.new(1, -4, 0, topH / 2)})
+                task.delay(0.15, function() Tween(arrow, 0.4, {Position = UDim2.new(1, -12, 0, topH / 2)}, Enum.EasingStyle.Back) end)
+            end)
+            Sub.Open = openSub
+            Sub.Close = closeSub
+            return Sub
+        end
+
+        -- SkinButton: opens the skin page (viewport, skin color, load by ID, effects)
+        function Tab:SkinButton(c)
+            c = c or {}
+            local topH = 50
+            local f, sc = Base(topH, c.Name or "Skin", c.Desc or "Preview, recolor and change your skin", 56)
+            GradBorder(f, c.Colors or {"Cyan", "Pink", "Violet"})
+            local btn = New("TextButton", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", ZIndex = 2, Parent = f})
+            local arrow = New("TextLabel", {AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0, topH / 2), Size = UDim2.fromOffset(24, 20), BackgroundTransparency = 1, Font = Font.GothamBlack, Text = ">>", TextSize = 16, TextColor3 = T.Accent, Parent = f})
+            Reg(function() arrow.TextColor3 = T.Accent end)
+            Press(btn, sc, c.Sound)
+            local Sub, openSub, closeSub = MakeSubPage(c.Name or "Skin", BuildSkinPage)
             btn.MouseButton1Click:Connect(function()
                 openSub()
                 Tween(arrow, 0.15, {Position = UDim2.new(1, -4, 0, topH / 2)})
@@ -1788,6 +2438,7 @@ function Library:CreateWindow(cfg)
         New("UIListLayout", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = sscroll})
         New("UIPadding", {PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 8), PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 4), Parent = sscroll})
         Reg(function() sscroll.ScrollBarImageColor3 = T.Accent end)
+        Sub.Scroll = sscroll
         Elements(Sub, sscroll)
         if build then build(Sub) end
 
