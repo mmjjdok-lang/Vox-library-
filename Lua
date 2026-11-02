@@ -59,6 +59,54 @@ local function Clean(name)
     if pg and pg:FindFirstChild(name) then pg[name]:Destroy() end
 end
 
+-- ======================================================
+-- Storage: every save goes to ALL of these places, load picks the newest
+--   1) folder file   VOX_HUB/<name>
+--   2) flat file     VOX_HUB_<name>        (if makefolder is blocked)
+--   3) memory        getgenv().__VOX_MEM   (survives re-execute in the same session)
+-- ======================================================
+local Store = {}
+local StoreEnv = (getgenv and getgenv()) or _G
+StoreEnv.__VOX_MEM = StoreEnv.__VOX_MEM or {}
+local function fsOK() return (writefile and readfile and isfile) and true or false end
+function Store.Write(dir, name, str)
+    local okAny = false
+    StoreEnv.__VOX_MEM[dir .. "/" .. name] = str
+    if fsOK() then
+        pcall(function() if makefolder and isfolder and not isfolder(dir) then makefolder(dir) end end)
+        if pcall(writefile, dir .. "/" .. name, str) then okAny = true end
+        if pcall(writefile, dir .. "_" .. name, str) then okAny = true end
+    end
+    return okAny
+end
+function Store.Read(dir, name)
+    local cands = {}
+    local mem = StoreEnv.__VOX_MEM[dir .. "/" .. name]
+    if mem then table.insert(cands, mem) end
+    if fsOK() then
+        for _, p in ipairs({dir .. "/" .. name, dir .. "_" .. name}) do
+            local ok, str = pcall(function() if isfile(p) then return readfile(p) end end)
+            if ok and type(str) == "string" and str ~= "" then table.insert(cands, str) end
+        end
+    end
+    local best, bt
+    for _, str in ipairs(cands) do
+        local ok, d = pcall(function() return HttpService:JSONDecode(str) end)
+        if ok and type(d) == "table" then
+            local t = tonumber(d.__t) or 0
+            if not best or t > bt then best, bt = d, t end
+        end
+    end
+    return best
+end
+function Store.Delete(dir, name)
+    StoreEnv.__VOX_MEM[dir .. "/" .. name] = nil
+    if delfile and fsOK() then
+        pcall(function() if isfile(dir .. "/" .. name) then delfile(dir .. "/" .. name) end end)
+        pcall(function() if isfile(dir .. "_" .. name) then delfile(dir .. "_" .. name) end end)
+    end
+end
+
 -- Icons
 local IconsLib
 for _ = 1, 3 do
@@ -284,6 +332,7 @@ end
 Library.ClickSound = "Pop"
 Library.SoundVolume = 0.6
 Library.SoundEnabled = true
+Library.SeaEnabled = true
 
 function Library:AddSound(name, id)
     if not Library.SoundMap[name] then table.insert(Library.SoundNames, name) end
@@ -379,6 +428,18 @@ local function sameOutfit(target, now)
         local a, b
         pcall(function() a, b = target[f], now[f] end)
         if a ~= nil and a ~= 0 and a ~= b then return false end
+    end
+    -- hair + accessories: every id of the target must be worn now
+    for _, f in ipairs({"HatAccessory", "HairAccessory", "FaceAccessory", "NeckAccessory", "ShouldersAccessory", "FrontAccessory", "BackAccessory", "WaistAccessory"}) do
+        local a, b
+        pcall(function() a, b = tostring(target[f] or ""), tostring(now[f] or "") end)
+        if a and a ~= "" then
+            local have = {}
+            for id in tostring(b):gmatch("%d+") do have[id] = true end
+            for id in a:gmatch("%d+") do
+                if not have[id] then return false end
+            end
+        end
     end
     return true
 end
@@ -654,12 +715,26 @@ function Skin.SetColor(col)
     bc.RightLegColor3 = col
 end
 
--- what the config manager saves / restores for the skin page
+-- what the config saves / restores for the skin (works even if the skin page was never opened)
 function Skin.Export()
-    return {Id = Skin.LastId, Color = Skin.Color and Skin.Color:ToHex() or nil, Recent = Skin.Recent}
+    local fx = {}
+    for _, n in ipairs(Skin.Names) do if Skin.Active[n] then table.insert(fx, n) end end
+    local text = Skin.SavedText
+    if Skin.GetText then
+        local ok, t = pcall(Skin.GetText)
+        if ok and type(t) == "string" then text = t end
+    end
+    return {
+        Id = Skin.LastId and tostring(Skin.LastId) or nil,
+        Name = Skin.LastName,
+        Text = text,
+        Color = Skin.Color and Skin.Color:ToHex() or nil,
+        Recent = Skin.Recent,
+        Effects = fx,
+    }
 end
 
-function Skin.Import(t)
+function Skin.Restore(t)
     if type(t) ~= "table" then return end
     if type(t.Recent) == "table" then
         Skin.Recent = t.Recent
@@ -670,12 +745,50 @@ function Skin.Import(t)
         local ok, c3 = pcall(Color3.fromHex, t.Color)
         if ok then col = c3 end
     end
-    if t.Id and Skin.LoadId then
-        Skin.LoadId(tostring(t.Id), true, col)
-    elseif col then
-        Skin.SetColor(col)
-    end
+    local id = tonumber(t.Id)
+    Skin.SavedText = t.Text
+    Skin.LastName = t.Name or Skin.LastName
+    if id then Skin.LastId = id end
+    if col then Skin.Color = col end
+    Skin.Restoring = true
+    task.spawn(function()
+        local t0 = os.clock()
+        while not (LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")) and os.clock() - t0 < 30 do task.wait(0.3) end
+        task.wait(1.2)
+        if id then
+            local desc
+            for _ = 1, 5 do
+                local ok, d = pcall(function() return Players:GetHumanoidDescriptionFromUserId(id) end)
+                if ok and d then desc = d break end
+                task.wait(0.8)
+            end
+            if desc then Skin.Apply(desc, true) task.wait(0.3) end
+        end
+        if col then Skin.SetColor(col) end
+        for _, n in ipairs(t.Effects or {}) do
+            if Skin.Effects[n] then Skin.Active[n] = true end
+        end
+        Skin.Reapply()
+        Skin.Restoring = false
+        if Skin.OnRestored then pcall(Skin.OnRestored) end
+    end)
 end
+
+function Skin.Import(t) Skin.Restore(t) end
+
+-- after you respawn: skin, color and effects come back by themselves (the skin page does not need to be open)
+Conn(LP.CharacterAdded, function(char)
+    if not (Skin.LastDesc or Skin.Color or next(Skin.Active)) then return end
+    task.spawn(function()
+        pcall(function() char:WaitForChild("Humanoid", 8) end)
+        task.wait(1.5)
+        if Skin.Restoring then return end
+        if Skin.LastDesc then Skin.Apply(Skin.LastDesc, true) end
+        if Skin.Color then Skin.SetColor(Skin.Color) end
+        Skin.Reapply()
+        if Skin.OnRespawn then pcall(Skin.OnRespawn) end
+    end)
+end)
 
 -- Notify
 local NotifyPos = {
@@ -1011,6 +1124,66 @@ function Library:CreateWindow(cfg)
     Reg(function() mgrad.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, T.Mid), ColorSequenceKeypoint.new(0.55, T.Dark), ColorSequenceKeypoint.new(0.85, T.Deep), ColorSequenceKeypoint.new(1, T.Second:Lerp(BLACK, 0.7))}) end)
     WConn(RS.RenderStepped, function() mgrad.Offset = Vector2.new(math.sin(os.clock() * 0.5) * 0.25, math.cos(os.clock() * 0.4) * 0.25) end)
 
+
+    -- ======================================================
+    -- Real sea inside the frame: 3 layers of moving water, crest foam and sun glitter
+    -- (built from thin water columns that follow real sine waves, not a flat effect)
+    -- ======================================================
+    local Sea = {On = (cfg.Sea ~= false) and Library.SeaEnabled ~= false}
+    do
+        local N = 36
+        local defs = {
+            {base = 0.40, amp = 0.030, k = 1.6, w = 0.8, ph = 0.0, top = Color3.fromRGB(30, 118, 190), bot = Color3.fromRGB(3, 22, 56), tr = 0.40},
+            {base = 0.32, amp = 0.036, k = 2.3, w = -1.1, ph = 1.7, top = Color3.fromRGB(40, 158, 216), bot = Color3.fromRGB(7, 48, 100), tr = 0.32},
+            {base = 0.23, amp = 0.042, k = 3.2, w = 1.5, ph = 3.1, top = Color3.fromRGB(78, 210, 232), bot = Color3.fromRGB(11, 80, 138), tr = 0.22, foam = true},
+        }
+        local box = New("Frame", {Name = "Sea", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 1, Visible = Sea.On, Parent = Main})
+        Sea.Box = box
+        for _, L in ipairs(defs) do
+            L.cols, L.foams = {}, {}
+            for i = 1, N do
+                local c = New("Frame", {AnchorPoint = Vector2.new(0, 1), Position = UDim2.new((i - 1) / N, 0, 1, 0), Size = UDim2.new(1 / N, 1, L.base, 0), BackgroundColor3 = WHITE, BackgroundTransparency = L.tr, BorderSizePixel = 0, ZIndex = 1, Parent = box})
+                New("UIGradient", {Color = ColorSequence.new(L.top, L.bot), Rotation = 90, Parent = c})
+                if L.foam then
+                    L.foams[i] = New("Frame", {Size = UDim2.new(1, 0, 0, 4), BackgroundColor3 = WHITE, BackgroundTransparency = 0.4, BorderSizePixel = 0, ZIndex = 2, Parent = c})
+                end
+                L.cols[i] = c
+            end
+        end
+        local glitter = {}
+        local rnd = Random.new(7)
+        for i = 1, 18 do
+            local g = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(rnd:NextNumber(0.03, 0.97), rnd:NextNumber(0.62, 0.97)), Size = UDim2.fromOffset(rnd:NextInteger(2, 4), rnd:NextInteger(1, 2)), BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 3, Parent = box})
+            glitter[i] = {f = g, sp = rnd:NextNumber(1.2, 3.2), ph = rnd:NextNumber(0, 6.28)}
+        end
+        local acc = 0
+        WConn(RS.RenderStepped, function(dt)
+            if not Sea.On or not Window.Visible or Window.Collapsed then return end
+            acc = acc + dt
+            if acc < 1 / 30 then return end
+            acc = 0
+            local t = os.clock()
+            for _, L in ipairs(defs) do
+                local tide = 0.012 * math.sin(t * 0.5 + L.ph)
+                for i, c in ipairs(L.cols) do
+                    local u = (i - 1) / N * math.pi * 2 * L.k
+                    local wave = math.sin(u + t * L.w + L.ph) + 0.5 * math.sin(u * 1.9 - t * L.w * 0.7) + 0.25 * math.sin(u * 3.7 + t * L.w * 1.6)
+                    c.Size = UDim2.new(1 / N, 1, math.clamp(L.base + tide + L.amp * wave * 0.65, 0.05, 0.95), 0)
+                    local fm = L.foams[i]
+                    if fm then fm.BackgroundTransparency = 0.88 - 0.62 * math.max(0, math.sin(u + t * L.w + L.ph + 1.2)) end
+                end
+            end
+            for _, g in ipairs(glitter) do
+                g.f.BackgroundTransparency = 1 - 0.75 * math.max(0, math.sin(t * g.sp + g.ph))
+            end
+        end)
+    end
+    function Window:SetSea(on)
+        Sea.On = on and true or false
+        Library.SeaEnabled = Sea.On
+        Sea.Box.Visible = Sea.On
+    end
+
     for i = 1, 2 do
         local orb = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(i == 1 and 0.2 or 0.85, i == 1 and 0.85 or 0.2), Size = UDim2.fromOffset(220, 220), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, BorderSizePixel = 0, ZIndex = 1, Parent = Main})
         Corner(orb, 999)
@@ -1050,7 +1223,7 @@ function Library:CreateWindow(cfg)
     local colB = topBtn("^", 42, T.Accent)
     local hideB = topBtn("-", 74, WHITE)
 
-    local side = New("Frame", {Position = UDim2.fromOffset(8, 52), Size = UDim2.new(0, 130, 1, -112), BackgroundColor3 = T.Deep, BackgroundTransparency = 0, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 3, Parent = Body})
+    local side = New("Frame", {Position = UDim2.fromOffset(8, 52), Size = UDim2.new(0, 130, 1, -112), BackgroundColor3 = T.Deep, BackgroundTransparency = 0.25, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 3, Parent = Body})
     Corner(side, 10)
     local sst = New("UIStroke", {Color = T.Accent, Thickness = 2, Transparency = 0.15, Parent = side})
     Reg(function() side.BackgroundColor3 = T.Deep sst.Color = T.Accent end)
@@ -1177,6 +1350,7 @@ function Library:CreateWindow(cfg)
     end
 
     function Window:Destroy()
+        if Window.SaveLive then pcall(Window.SaveLive, true) end
         Window:SetVisible(false)
         task.delay(0.5, function()
             for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
@@ -1196,6 +1370,7 @@ function Library:CreateWindow(cfg)
             HoldTime = 1.8,
             Color = "Red",
             OnConfirm = function()
+                if Window.SaveLive then pcall(Window.SaveLive, true) end
                 Window:SetVisible(false)
                 task.delay(0.6, function() Library:Unload() end)
             end,
@@ -1207,7 +1382,8 @@ function Library:CreateWindow(cfg)
         end)
     end
 
-    function Window:SetColor(c) SetT(c) Library.Accent = T.Accent for _, fn in ipairs(reg) do pcall(fn) end end
+    Window.ThemeName = type(cfg.Color) == "string" and cfg.Color or nil
+    function Window:SetColor(c) Window.ThemeName = type(c) == "string" and c or nil SetT(c) Library.Accent = T.Accent for _, fn in ipairs(reg) do pcall(fn) end end
     function Window:SetTransparency(n) curTrans = math.clamp(n, 0, 1) Tween(Main, 0.3, {BackgroundTransparency = curTrans}) end
     function Window:SetTitle(s) title.Text = s end
     function Window:SetDescription(s) desc.Text = s end
@@ -1281,11 +1457,39 @@ function Library:CreateWindow(cfg)
     --   theme, sounds, skin (user id, color, recent list)
     -- ======================================================
     local CFG_DIR = cfg.ConfigFolder or "VOX_HUB"
-    local function fsOk() return (writefile and readfile and isfile and makefolder and isfolder and listfiles) and true or false end
-    local function ser(v) if typeof(v) == "Color3" then return {__c = v:ToHex()} end return v end
-    local function de(v) if type(v) == "table" and v.__c then return Color3.fromHex(v.__c) end return v end
-    local function ensure() if not isfolder(CFG_DIR) then makefolder(CFG_DIR) end end
+    local LIVE_NAME = "_live.json"
     local function noFs() Library:Notify({Title = "Config", Message = "Your executor does not support file functions", Color = "Red", Time = 4}) end
+
+    -- values -> json safe (Color3, enums, NaN, nested tables)
+    local function ser(v, d)
+        d = d or 0
+        local ty = typeof(v)
+        if ty == "Color3" then return {__c = v:ToHex()} end
+        if ty == "number" then if v ~= v or v == math.huge or v == -math.huge then return nil end return v end
+        if ty == "string" or ty == "boolean" then return v end
+        if ty == "EnumItem" then return {__e = tostring(v)} end
+        if ty == "table" and d < 5 then
+            local o = {}
+            for k, x in pairs(v) do
+                local c = ser(x, d + 1)
+                if c ~= nil then o[k] = c end
+            end
+            return o
+        end
+        return nil
+    end
+    local function de(v)
+        if type(v) ~= "table" then return v end
+        if v.__c then return Color3.fromHex(v.__c) end
+        if v.__e then
+            local en, it = tostring(v.__e):match("^Enum%.(%w+)%.(%w+)$")
+            local ok, r = pcall(function() return Enum[en][it] end)
+            return ok and r or nil
+        end
+        local o = {}
+        for k, x in pairs(v) do o[k] = de(x) end
+        return o
+    end
 
     local function posData(g)
         local p = g.Position
@@ -1293,78 +1497,138 @@ function Library:CreateWindow(cfg)
     end
     local function posApply(g, t)
         if type(t) ~= "table" or #t < 4 then return end
-        local s = Gui.AbsoluteSize
+        local sz = Gui.AbsoluteSize
         local ox, oy = t[2], t[4]
-        if t[1] == 0 then ox = math.clamp(ox, 30, math.max(30, s.X - 30)) end
-        if t[3] == 0 then oy = math.clamp(oy, 30, math.max(30, s.Y - 30)) end
+        if t[1] == 0 then ox = math.clamp(ox, 30, math.max(30, sz.X - 30)) end
+        if t[3] == 0 then oy = math.clamp(oy, 30, math.max(30, sz.Y - 30)) end
         g.Position = UDim2.new(t[1], ox, t[3], oy)
     end
 
+    -- Saved values wait here until the matching element is built (works with any build order)
+    local Persist = {LastActivity = os.clock() + 2, LastStr = nil, WinPos = nil, Notified = false, Jobs = 0}
+    local Pending = {flags = {}, floats = {}, window = nil, skin = nil}
+    local queue, qtoken = {}, 0
+    local function flush()
+        Window.Loading = true
+        for _, job in ipairs(queue) do pcall(job) end
+        Persist.Jobs = Persist.Jobs + #queue
+        table.clear(queue)
+        Window.Loading = false
+        Persist.LastActivity = os.clock()
+        if Persist.Jobs > 0 and not Persist.Notified then
+            Persist.Notified = true
+            Library:Notify({Title = "Settings", Message = "Your saved settings were restored", Time = 3, Icon = "save"})
+        end
+    end
+    local function schedule(job)
+        table.insert(queue, job)
+        qtoken = qtoken + 1
+        local my = qtoken
+        Persist.LastActivity = os.clock()
+        task.delay(0.7, function() if my == qtoken then flush() end end)
+    end
+    setmetatable(Window.Flags, {__newindex = function(t, k, obj)
+        rawset(t, k, obj)
+        Persist.LastActivity = os.clock()
+        local raw = Pending.flags[k]
+        if raw ~= nil then
+            Pending.flags[k] = nil
+            schedule(function() obj:Set(de(raw)) end)
+        end
+    end})
+
+    local function spawnFloatData(d)
+        local info = Window.FloatInfos[d.Key]
+        if not info then return end
+        local cols = {}
+        for _, hx in ipairs(d.Colors or {}) do table.insert(cols, Color3.fromHex(hx)) end
+        Window:SpawnFloat(info, {Name = d.Name, W = d.W, H = d.H, Transparency = d.Transparency, Color = Color3.fromHex(d.Color), Colors = cols, Thickness = d.Thickness, Speed = d.Speed, Strength = d.Strength}, d.Pos)
+    end
+    -- every floating button (its look, position, on/off) is brought back as soon as its toggle exists
+    function Window.OnFloatInfo(info)
+        local d = Pending.floats[info.Key]
+        if d then
+            Pending.floats[info.Key] = nil
+            schedule(function() spawnFloatData(d) end)
+        end
+    end
+
     local function collect()
-        local data = {__v = 2, flags = {}, floats = {}, window = {}, skin = {}}
+        local data = {__v = 3, __t = os.time(), flags = {}, floats = {}, window = {}, skin = {}}
+        for k, v in pairs(Pending.flags) do data.flags[k] = v end
         for k, o in pairs(Window.Flags) do
             local good, v = pcall(function() return o:Get() end)
-            if good and v ~= nil then data.flags[k] = ser(v) end
+            if good and v ~= nil then
+                local c = ser(v)
+                if c ~= nil and pcall(function() return HttpService:JSONEncode({c}) end) then data.flags[k] = c end
+            end
         end
         for _, fl in pairs(Window.Floats) do
             local good, d = pcall(function() return fl:GetData() end)
             if good and d then table.insert(data.floats, d) end
         end
+        for key, d in pairs(Pending.floats) do
+            if not Window.FloatInfos[key] then table.insert(data.floats, d) end
+        end
+        local pos = (not Window.Collapsed) and posData(Holder) or Persist.WinPos
+        Persist.WinPos = pos
         data.window = {
             color = T.Accent:ToHex(),
+            theme = Window.ThemeName,
             transparency = curTrans,
-            pos = (not Window.Collapsed) and posData(Holder) or nil,
+            pos = pos,
             openPos = Window.OpenButton and posData(Window.OpenButton) or nil,
             sound = Library.SoundEnabled,
             volume = Library.SoundVolume,
             clickSound = Library.ClickSound,
+            sea = Library.SeaEnabled,
         }
-        pcall(function() data.skin = Skin.Export() end)
+        local okS, sk = pcall(Skin.Export)
+        data.skin = okS and sk or {}
         return data
     end
 
-    local function applyData(data)
-        if type(data) ~= "table" then return false end
-        Window.Loading = true
-        local flags = data.flags or (data.__v == nil and data) or {}
-        local w = data.window or {}
+    local function applyWindow(w)
+        if type(w) ~= "table" then return end
         pcall(function()
-            if w.color then Window:SetColor(Color3.fromHex(w.color)) end
+            if w.theme and Library.ResolveColor(w.theme) then Window:SetColor(w.theme)
+            elseif w.color then Window:SetColor(Color3.fromHex(w.color)) end
             if w.transparency then Window:SetTransparency(w.transparency) end
-            if w.pos and not Window.Collapsed then posApply(Holder, w.pos) end
+            if w.pos and not Window.Collapsed then posApply(Holder, w.pos) Persist.WinPos = w.pos end
             if w.openPos and Window.OpenButton then posApply(Window.OpenButton, w.openPos) end
             if w.sound ~= nil then Library.SoundEnabled = w.sound and true or false end
             if w.volume then Library.SoundVolume = w.volume end
             if w.clickSound then Library.ClickSound = w.clickSound end
+            if w.sea ~= nil then Window:SetSea(w.sea) end
         end)
+    end
+
+    -- used by Load Config / Import (everything is already built then)
+    local function applyData(data)
+        if type(data) ~= "table" then return false end
+        Window.Loading = true
+        local flags = data.flags or (data.__v == nil and data) or {}
+        applyWindow(data.window)
         for k, v in pairs(flags) do
             local o = Window.Flags[k]
             if o then pcall(function() o:Set(de(v)) end) end
         end
         for info, fl in pairs(Window.Floats) do pcall(function() fl:Destroy() end) end
-        for _, d in ipairs(data.floats or {}) do
-            local info = Window.FloatInfos[d.Key]
-            if info then
-                pcall(function()
-                    local cols = {}
-                    for _, hx in ipairs(d.Colors or {}) do table.insert(cols, Color3.fromHex(hx)) end
-                    Window:SpawnFloat(info, {Name = d.Name, W = d.W, H = d.H, Transparency = d.Transparency, Color = Color3.fromHex(d.Color), Colors = cols, Thickness = d.Thickness, Speed = d.Speed, Strength = d.Strength}, d.Pos)
-                end)
-            end
-        end
-        if data.skin then pcall(function() Skin.Import(data.skin) end) end
+        for _, d in ipairs(data.floats or {}) do pcall(spawnFloatData, d) end
+        if data.skin then pcall(Skin.Import, data.skin) end
         Window.Loading = false
+        Persist.LastActivity = os.clock()
         return true
     end
 
     function Window:ListConfigs()
         local out = {}
-        if not fsOk() then return out end
+        if not (listfiles and isfolder and fsOK()) then return out end
         pcall(function()
-            ensure()
+            if makefolder and not isfolder(CFG_DIR) then makefolder(CFG_DIR) end
             for _, p in ipairs(listfiles(CFG_DIR)) do
                 local n = p:match("([^/\\]+)%.json$")
-                if n then table.insert(out, n) end
+                if n and n:sub(1, 1) ~= "_" then table.insert(out, n) end
             end
         end)
         table.sort(out)
@@ -1372,11 +1636,9 @@ function Library:CreateWindow(cfg)
     end
     function Window:SaveConfig(name, silent)
         name = (name and name ~= "") and name or "default"
-        if not fsOk() then if not silent then noFs() end return false end
-        local ok = pcall(function()
-            ensure()
-            writefile(CFG_DIR .. "/" .. name .. ".json", HttpService:JSONEncode(collect()))
-        end)
+        local ok = false
+        local good, str = pcall(function() return HttpService:JSONEncode(collect()) end)
+        if good then ok = Store.Write(CFG_DIR, name .. ".json", str) or not fsOK() end
         if not silent or not ok then
             Library:Notify({Title = "Config", Message = ok and ('Saved "' .. name .. '"') or "Failed to save config", Color = ok and nil or "Red", Time = 3, Icon = "save"})
         end
@@ -1384,14 +1646,12 @@ function Library:CreateWindow(cfg)
     end
     function Window:LoadConfig(name)
         name = (name and name ~= "") and name or "default"
-        if not fsOk() then noFs() return false end
-        local path = CFG_DIR .. "/" .. name .. ".json"
-        if not isfile(path) then
+        local data = Store.Read(CFG_DIR, name .. ".json")
+        if not data then
             Library:Notify({Title = "Config", Message = 'Config "' .. name .. '" was not found', Color = "Red", Time = 3})
             return false
         end
         local ok = pcall(function()
-            local data = HttpService:JSONDecode(readfile(path))
             if not applyData(data) then error("bad data") end
         end)
         Window.Loading = false
@@ -1399,9 +1659,7 @@ function Library:CreateWindow(cfg)
         return ok
     end
     function Window:DeleteConfig(name)
-        if not fsOk() or not delfile then noFs() return false end
-        local path = CFG_DIR .. "/" .. tostring(name) .. ".json"
-        local ok = pcall(function() if isfile(path) then delfile(path) end end)
+        local ok = pcall(function() Store.Delete(CFG_DIR, tostring(name) .. ".json") end)
         Library:Notify({Title = "Config", Message = ok and ('Deleted "' .. tostring(name) .. '"') or "Failed to delete", Color = ok and nil or "Red", Time = 3})
         return ok
     end
@@ -1427,25 +1685,21 @@ function Library:CreateWindow(cfg)
         return good
     end
     function Window:SetAutoLoad(name)
-        if not fsOk() then noFs() return end
-        pcall(function()
-            ensure()
-            local p = CFG_DIR .. "/_autoload.txt"
-            if name and name ~= "" then writefile(p, name)
-            elseif isfile(p) and delfile then delfile(p) end
-        end)
+        if name and name ~= "" then
+            Store.Write(CFG_DIR, "_autoload.json", HttpService:JSONEncode({name = name, __t = os.time()}))
+        else
+            Store.Delete(CFG_DIR, "_autoload.json")
+        end
     end
     function Window:GetAutoLoad()
-        if not fsOk() then return nil end
-        local out
-        pcall(function() local p = CFG_DIR .. "/_autoload.txt" if isfile(p) then out = readfile(p) end end)
-        return (out and out ~= "") and out or nil
+        local d = Store.Read(CFG_DIR, "_autoload.json")
+        return (d and d.name and d.name ~= "") and d.name or nil
     end
     function Window:LoadAutoConfig()
         local n = Window:GetAutoLoad()
         if n then Window:LoadConfig(n) end
     end
-    -- saves the config again every 20 seconds while it is on
+    -- kept for old scripts: saving is already automatic, this only adds a named copy every 20 seconds
     local autoSaveOn = false
     function Window:SetAutoSave(on, getName)
         autoSaveOn = on and true or false
@@ -1458,6 +1712,51 @@ function Library:CreateWindow(cfg)
                 end
                 Window.AutoSaving = false
             end)
+        end
+    end
+
+    -- ======================================================
+    -- LIVE SAVE: always on. Every change is written to the files by itself (about 1.5 s later),
+    -- and the next time the script runs everything is put back: toggles, sliders, dropdowns,
+    -- textboxes, colors, floating buttons (look + position + on/off), window + open button
+    -- position, theme, sounds, sea, and the skin (player name/ID, color, effects).
+    -- ======================================================
+    local function liveWrite(force)
+        if not force and (Window.Loading or os.clock() - Persist.LastActivity < 2.5) then return end
+        local ok, data = pcall(collect)
+        if not ok then return end
+        data.__t = nil
+        local ok2, s1 = pcall(function() return HttpService:JSONEncode(data) end)
+        if not ok2 or (s1 == Persist.LastStr and not force) then return end
+        data.__t = os.time()
+        local ok3, s2 = pcall(function() return HttpService:JSONEncode(data) end)
+        if not ok3 then return end
+        local wrote = Store.Write(CFG_DIR, LIVE_NAME, s2)
+        if wrote or not fsOK() then Persist.LastStr = s1 end
+    end
+    Window.SaveLive = liveWrite
+    task.spawn(function()
+        while Holder.Parent do
+            task.wait(1.5)
+            pcall(liveWrite)
+        end
+    end)
+    WConn(Players.PlayerRemoving, function(p) if p == LP then pcall(liveWrite, true) end end)
+
+    -- load what was saved last time
+    do
+        local d = Store.Read(CFG_DIR, LIVE_NAME)
+        if not d then
+            local an = Window:GetAutoLoad()
+            if an then d = Store.Read(CFG_DIR, an .. ".json") end
+        end
+        if type(d) == "table" then
+            Pending.flags = type(d.flags) == "table" and d.flags or {}
+            Pending.window = d.window
+            Pending.skin = d.skin
+            for _, f in ipairs(d.floats or {}) do
+                if type(f) == "table" and f.Key then Pending.floats[f.Key] = f end
+            end
         end
     end
 
@@ -2146,6 +2445,7 @@ function Library:CreateWindow(cfg)
                 local applied = Skin.Apply(desc)
                 if applied then
                     Skin.LastId = id
+                    Skin.LastName = uname
                     Skin.AddRecent(id, uname)
                     task.wait(0.3)
                     if keepColor then Skin.SetColor(keepColor) sw.BackgroundColor3 = keepColor
@@ -2170,6 +2470,16 @@ function Library:CreateWindow(cfg)
         idBox.FocusLost:Connect(function(enter)
             if enter then loadSkin(idBox.Text) end
         end)
+        Skin.GetText = function() return idBox.Text end
+        Skin.OnRestored = function()
+            if Skin.LastId then
+                idBox.Text = (Skin.SavedText and Skin.SavedText ~= "") and Skin.SavedText or tostring(Skin.LastName or Skin.LastId)
+            end
+            if Skin.Color then sw.BackgroundColor3 = Skin.Color end
+            task.delay(0.4, refreshPreview)
+        end
+        if Skin.SavedText and Skin.SavedText ~= "" then idBox.Text = Skin.SavedText
+        elseif Skin.LastId then idBox.Text = tostring(Skin.LastName or Skin.LastId) end
 
         local loadBtn = rcBtn("Load Skin", 74)
         loadBtn.MouseButton1Click:Connect(function() loadSkin(idBox.Text) end)
@@ -2227,7 +2537,7 @@ function Library:CreateWindow(cfg)
         Skin.OnRecent = function() rd:Refresh(Skin.Recent, false) end
 
         -- add items (effects list)
-        dd = P:Dropdown({Name = "Add Items", Desc = "Headless, Korblox, auras and head effects", Options = Skin.Names, Multi = true, Callback = function(list)
+        dd = P:Dropdown({Name = "Add Items", Desc = "Headless, Korblox, auras and head effects", Options = Skin.Names, Multi = true, Default = (function() local l = {} for _, n in ipairs(Skin.Names) do if Skin.Active[n] then l[#l + 1] = n end end return l end)(), Callback = function(list)
             local want = {}
             for _, n in ipairs(list) do want[n] = true end
             for _, n in ipairs(Skin.Names) do
@@ -2243,14 +2553,7 @@ function Library:CreateWindow(cfg)
         end})
 
         -- after you respawn the last skin, color and effects are put back automatically
-        WConn(LP.CharacterAdded, function(char)
-            pcall(function() char:WaitForChild("Humanoid", 8) end)
-            task.wait(1.5)
-            if Skin.LastDesc then Skin.Apply(Skin.LastDesc, true) end
-            if Skin.Color then Skin.SetColor(Skin.Color) end
-            Skin.Reapply()
-            refreshPreview()
-        end)
+        Skin.OnRespawn = refreshPreview
         task.spawn(refreshPreview)
     end
 
@@ -2322,6 +2625,7 @@ function Library:CreateWindow(cfg)
             Window.FlagCount["float:" .. info.Key] = n
             if n > 1 then info.Key = info.Key .. "#" .. n end
             Window.FloatInfos[info.Key] = info
+            if Window.OnFloatInfo then Window.OnFloatInfo(info) end
 
             local m = New("TextButton", {AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, leftX, 0, cy), Size = UDim2.fromOffset(24, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.7, Text = "", AutoButtonColor = false, ZIndex = 5, Parent = f})
             Corner(m, 6)
@@ -2730,6 +3034,7 @@ function Library:CreateWindow(cfg)
                 if v and not Window.Loading then Window:SetColor(v) end
             end})
             Tab:Slider({Name = "UI Transparency", Min = 0, Max = 0.9, Default = curTrans, Increment = 0.05, Flag = "UI_Transparency", Callback = function(v) Window:SetTransparency(v) end})
+            Tab:Toggle({Name = "Sea Waves", Desc = "Real animated sea inside the frame", Default = Window and Sea.On, MiniButton = false, Flag = "UI_Sea", Callback = function(v) Window:SetSea(v) end})
             Tab:Section("Sound")
             Tab:Toggle({Name = "UI Sounds", Default = Library.SoundEnabled, MiniButton = false, Flag = "UI_Sound", Callback = function(v) Library.SoundEnabled = v end})
             Tab:Dropdown({Name = "Click Sound", Options = Library.SoundNames, Default = Library.ClickSound, Search = true, Silent = true, Flag = "UI_ClickSound", Callback = function(v)
@@ -2757,7 +3062,7 @@ function Library:CreateWindow(cfg)
 
         function Tab:ConfigManager()
             Tab:Section("Configuration")
-            Tab:Note({Title = "Saves everything", Text = "A config keeps every toggle, slider, dropdown, textbox and color, your floating buttons (look + position), window position, theme, sounds and your skin. Files are stored in the folder: " .. CFG_DIR, Color = "Emerald"})
+            Tab:Note({Title = "Saves everything", Text = "AUTO-SAVE IS ALWAYS ON: every change is saved by itself and comes back next time you run the script. A named config keeps every toggle, slider, dropdown, textbox and color, your floating buttons (look + position), window position, theme, sounds and your skin. Files are stored in the folder: " .. CFG_DIR, Color = "Emerald"})
             local nameBox = Tab:Textbox({Name = "Config Name", Placeholder = "default", NoFlag = true})
             local dd
             dd = Tab:Dropdown({Name = "Saved Configs", Desc = "Pick one to load or delete", Options = Window:ListConfigs(), NoFlag = true, Callback = function(v)
@@ -3016,6 +3321,19 @@ function Library:CreateWindow(cfg)
         table.insert(Window.Tabs, Tab)
         if #Window.Tabs == 1 then task.delay(0.1, function() Select(Tab) end) end
         return Tab
+    end
+
+    -- put back the saved window state and the saved skin
+    task.delay(1.0, function()
+        Window.Loading = true
+        applyWindow(Pending.window)
+        Window.Loading = false
+        Persist.LastActivity = os.clock()
+    end)
+    if type(Pending.skin) == "table" and (Pending.skin.Id or Pending.skin.Color or (Pending.skin.Effects and #Pending.skin.Effects > 0)) then
+        task.spawn(function() Skin.Restore(Pending.skin) end)
+    else
+        if type(Pending.skin) == "table" and type(Pending.skin.Recent) == "table" then Skin.Recent = Pending.skin.Recent end
     end
 
     return Window
