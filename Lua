@@ -1070,6 +1070,190 @@ end
 Library.Key = Library.KeySystem
 
 -- Window
+-- ======================================================
+-- Floating button shapes.
+--   corner shapes  -> a real rounded frame (border + gradient are exact)
+--   polygon shapes -> built from thin rows of frames that follow the real outline of the shape,
+--                     the border gradient runs around the real edge of the shape
+-- ======================================================
+Library.FloatShapes = {}
+Library.FloatShapeOrder = {}
+local function addShape(name, d)
+    Library.FloatShapes[name] = d
+    table.insert(Library.FloatShapeOrder, name)
+end
+
+local function normPts(pts)
+    local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+    for _, p in ipairs(pts) do
+        x0, y0, x1, y1 = math.min(x0, p[1]), math.min(y0, p[2]), math.max(x1, p[1]), math.max(y1, p[2])
+    end
+    local sc = math.max(x1 - x0, y1 - y0)
+    local ox, oy = (1 - (x1 - x0) / sc) / 2, (1 - (y1 - y0) / sc) / 2
+    local o = {}
+    for i, p in ipairs(pts) do o[i] = {(p[1] - x0) / sc + ox, (p[2] - y0) / sc + oy} end
+    return o
+end
+local function regular(n, rot, inner)
+    local pts = {}
+    local count = inner and n * 2 or n
+    for i = 0, count - 1 do
+        local r = (inner and i % 2 == 1) and inner or 1
+        local a = math.rad(rot + i * 360 / count)
+        pts[#pts + 1] = {math.cos(a) * r, math.sin(a) * r}
+    end
+    return normPts(pts)
+end
+local function heartPts()
+    local pts = {}
+    for i = 0, 47 do
+        local t = i / 48 * math.pi * 2
+        pts[#pts + 1] = {16 * math.sin(t) ^ 3, -(13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t))}
+    end
+    return normPts(pts)
+end
+local function dropPts()
+    local pts = {{0.5, 0}}
+    local cx, cy, r = 0.5, 0.66, 0.34
+    local phi = math.acos(r / cy)
+    for i = 0, 28 do
+        local a = phi + (2 * math.pi - 2 * phi) * i / 28
+        pts[#pts + 1] = {cx + r * math.sin(a), cy - r * math.cos(a)}
+    end
+    return pts
+end
+local function polyHit(pts, x, y)
+    local inside = false
+    local j = #pts
+    for i = 1, #pts do
+        local xi, yi, xj, yj = pts[i][1], pts[i][2], pts[j][1], pts[j][2]
+        if ((yi > y) ~= (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi) then inside = not inside end
+        j = i
+    end
+    return inside
+end
+
+addShape("Rounded", {corner = UDim.new(0, 14)})
+addShape("Circle", {corner = UDim.new(0.5, 0), sq = true})
+addShape("Square", {corner = UDim.new(0, 0), sq = true})
+addShape("Rectangle", {corner = UDim.new(0, 0), wide = 1.7})
+addShape("Pill", {corner = UDim.new(0.5, 0), wide = 2})
+addShape("Squircle", {corner = UDim.new(0.3, 0), sq = true})
+addShape("Triangle", {pts = {{0.5, 0}, {1, 1}, {0, 1}}, sq = true})
+addShape("Triangle Down", {pts = {{0, 0}, {1, 0}, {0.5, 1}}, sq = true})
+addShape("Diamond", {pts = {{0.5, 0}, {1, 0.5}, {0.5, 1}, {0, 0.5}}, sq = true})
+addShape("Hexagon", {pts = regular(6, 0), sq = true})
+addShape("Pentagon", {pts = regular(5, -90), sq = true})
+addShape("Octagon", {pts = regular(8, 22.5), sq = true})
+addShape("Star", {pts = regular(5, -90, 0.4), sq = true})
+addShape("Star 4", {pts = regular(4, -90, 0.35), sq = true})
+addShape("Star 6", {pts = regular(6, -90, 0.55), sq = true})
+addShape("Burst", {pts = regular(12, -90, 0.82), sq = true})
+addShape("Heart", {pts = heartPts(), sq = true})
+addShape("Cross", {pts = {{0.33, 0}, {0.67, 0}, {0.67, 0.33}, {1, 0.33}, {1, 0.67}, {0.67, 0.67}, {0.67, 1}, {0.33, 1}, {0.33, 0.67}, {0, 0.67}, {0, 0.33}, {0.33, 0.33}}, sq = true})
+addShape("Arrow", {pts = {{0, 0.3}, {0.58, 0.3}, {0.58, 0}, {1, 0.5}, {0.58, 1}, {0.58, 0.7}, {0, 0.7}}, wide = 1.5})
+addShape("Parallelogram", {pts = {{0.22, 0}, {1, 0}, {0.78, 1}, {0, 1}}, wide = 1.7})
+addShape("Trapezoid", {pts = {{0.2, 0}, {0.8, 0}, {1, 1}, {0, 1}}, wide = 1.6})
+addShape("Shield", {pts = {{0, 0.05}, {0.5, 0}, {1, 0.05}, {1, 0.55}, {0.5, 1}, {0, 0.55}}, sq = true})
+addShape("Drop", {pts = dropPts(), sq = true})
+addShape("Moon", {fn = function(u, v)
+    return ((u - 0.5) ^ 2 + (v - 0.5) ^ 2 <= 0.25) and not ((u - 0.72) ^ 2 + (v - 0.42) ^ 2 <= 0.16)
+end, sq = true})
+addShape("Cloud", {fn = function(u, v)
+    local function c(cx, cy, r) return (u - cx) ^ 2 + (v - cy) ^ 2 <= r * r end
+    return c(0.28, 0.62, 0.2) or c(0.5, 0.42, 0.26) or c(0.74, 0.6, 0.22) or (u >= 0.28 and u <= 0.74 and v >= 0.6 and v <= 0.82)
+end, wide = 1.5})
+addShape("Bolt", {pts = {{0.6, 0}, {0.15, 0.55}, {0.45, 0.55}, {0.35, 1}, {0.85, 0.4}, {0.55, 0.4}, {0.8, 0}}, sq = true})
+addShape("Chamfer", {pts = {{0.14, 0}, {0.86, 0}, {1, 0.22}, {1, 0.78}, {0.86, 1}, {0.14, 1}, {0, 0.78}, {0, 0.22}}, wide = 1.6})
+
+local function sampleCols(cols, u)
+    local n = #cols
+    if n == 1 then return cols[1] end
+    u = u % 1
+    local p = u * n
+    local i = math.floor(p)
+    return cols[i % n + 1]:Lerp(cols[(i + 1) % n + 1], p - i)
+end
+
+-- builds a polygon shape inside `holder` (all frames use scale, so the button can pulse / resize)
+function Library.BuildPolyShape(holder, def, W, H, t)
+    local fills, rims = {}, {}
+    local rows = math.clamp(math.floor(H / 3), 18, 40)
+    local rh = H / rows
+    local step = math.max(1.5, W / 70)
+    local iw, ih = math.max(W - 2 * t, 4), math.max(H - 2 * t, 4)
+    local inside = def.fn or function(u, v) return polyHit(def.pts, u, v) end
+    local function hit(x, y) return inside((x - t) / iw, (y - t) / ih) end
+    local dirs = {}
+    for k = 0, 7 do dirs[#dirs + 1] = {math.cos(k * math.pi / 4), math.sin(k * math.pi / 4)} end
+    local function rimHit(x, y)
+        for _, d in ipairs(dirs) do
+            if hit(x + d[1] * t, y + d[2] * t) then return true end
+        end
+        for _, d in ipairs(dirs) do
+            if hit(x + d[1] * t * 0.5, y + d[2] * t * 0.5) then return true end
+        end
+        return false
+    end
+    local maxPiece = math.max(W / 4, 14)
+    local function rnd(v) return math.floor(v + 0.5) end
+    local function put(y0, y1, x0, x1, z)
+        x0, x1 = rnd(x0), rnd(x1)
+        if x1 <= x0 or y1 <= y0 then return nil end
+        return New("Frame", {Position = UDim2.fromScale(x0 / W, y0 / H), Size = UDim2.fromScale((x1 - x0) / W, (y1 - y0) / H), BackgroundColor3 = WHITE, BorderSizePixel = 0, ZIndex = z, Parent = holder}), x0, x1
+    end
+    local n = math.ceil(W / step)
+    for r = 0, rows - 1 do
+        local y0, y1 = rnd(r * rh), rnd((r + 1) * rh)
+        local y = (r + 0.5) * rh
+        local fs, rs
+        local function closeFill(px)
+            local f = put(y0, y1, fs, px, 2)
+            if f then table.insert(fills, f) end
+            fs = nil
+        end
+        local function closeRim(px)
+            local len = px - rs
+            local pieces = math.max(1, math.ceil(len / maxPiece))
+            local pw = len / pieces
+            for i = 0, pieces - 1 do
+                local a, b = rs + i * pw, rs + (i + 1) * pw
+                local f, fx0, fx1 = put(y0, y1, a, b, 3)
+                if f then table.insert(rims, {f = f, cx = (fx0 + fx1) / 2, cy = (y0 + y1) / 2}) end
+            end
+            rs = nil
+        end
+        for i = 0, n do
+            local px = math.min(i * step, W)
+            local inFill = hit(px, y)
+            local inRim = (not inFill) and rimHit(px, y)
+            if inFill then if not fs then fs = px end elseif fs then closeFill(px) end
+            if inRim then if not rs then rs = px end elseif rs then closeRim(px) end
+        end
+        if fs then closeFill(W) end
+        if rs then closeRim(W) end
+    end
+    local obj = {}
+    function obj.SetFill(c) for _, f in ipairs(fills) do f.BackgroundColor3 = c end end
+    function obj.SetFillTransparency(v) for _, f in ipairs(fills) do f.BackgroundTransparency = v end end
+    function obj.SetRimTransparency(v) for _, r in ipairs(rims) do r.f.BackgroundTransparency = v end end
+    function obj.Paint(cols, rot)
+        local a = math.rad(rot)
+        local dx, dy = math.cos(a), math.sin(a)
+        local ext = math.max(math.abs(W * dx) + math.abs(H * dy), 1)
+        for _, r in ipairs(rims) do
+            r.f.BackgroundColor3 = sampleCols(cols, ((r.cx - W / 2) * dx + (r.cy - H / 2) * dy) / ext + 0.5)
+        end
+    end
+    function obj.Destroy()
+        for _, f in ipairs(fills) do f:Destroy() end
+        for _, r in ipairs(rims) do r.f:Destroy() end
+        table.clear(fills)
+        table.clear(rims)
+    end
+    return obj
+end
+
 function Library:CreateWindow(cfg)
     cfg = cfg or {}
     if cfg.Sound ~= nil then Library:SetSound(cfg.Sound) end
@@ -1542,7 +1726,7 @@ function Library:CreateWindow(cfg)
         if not info then return end
         local cols = {}
         for _, hx in ipairs(d.Colors or {}) do table.insert(cols, Color3.fromHex(hx)) end
-        Window:SpawnFloat(info, {Name = d.Name, W = d.W, H = d.H, Transparency = d.Transparency, Color = Color3.fromHex(d.Color), Colors = cols, Thickness = d.Thickness, Speed = d.Speed, Strength = d.Strength}, d.Pos)
+        Window:SpawnFloat(info, {Name = d.Name, W = d.W, H = d.H, Shape = d.Shape, Transparency = d.Transparency, Color = Color3.fromHex(d.Color), Colors = cols, Thickness = d.Thickness, Speed = d.Speed, Strength = d.Strength}, d.Pos)
     end
     -- every floating button (its look, position, on/off) is brought back as soon as its toggle exists
     function Window.OnFloatInfo(info)
@@ -1918,14 +2102,15 @@ function Library:CreateWindow(cfg)
         return math.clamp(tonumber(a), 30, 300), math.clamp(tonumber(b), 30, 300)
     end
 
-    -- builds a floating button. o = {Name, W, H, Transparency, Color, Colors, Thickness, Speed, Strength}
+    -- builds a floating button. o = {Name, W, H, Shape, Transparency, Color, Colors, Thickness, Speed, Strength}
     local function BuildFloat(parent, o, toggle)
         o.Thickness = o.Thickness or 2.5
         o.Speed = o.Speed or 60
         o.Strength = o.Strength or 1
+        o.Shape = Library.FloatShapes[o.Shape] and o.Shape or "Rounded"
         local holder = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(o.W, o.H), BackgroundTransparency = 1, Parent = parent})
         local b = New("TextButton", {Name = "VOX_Float", Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Dark, BackgroundTransparency = o.Transparency, Text = "", AutoButtonColor = false, ZIndex = 5, NoSound = true, Parent = holder})
-        Corner(b, 14)
+        local corner = Corner(b, 14)
         local st = Stroke(b, WHITE, o.Thickness, 0)
         local grad = New("UIGradient", {Parent = st})
         local nameL = New("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromScale(0, toggle and -0.08 or 0), Size = UDim2.fromScale(1, 1), Font = Font.GothamBold, Text = o.Name, TextSize = 12, TextColor3 = WHITE, TextWrapped = true, Parent = b})
@@ -1933,9 +2118,21 @@ function Library:CreateWindow(cfg)
         if toggle then
             stateL = New("TextLabel", {AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -4), Size = UDim2.new(1, 0, 0, 12), BackgroundTransparency = 1, Font = Font.GothamBlack, Text = "OFF", TextSize = 10, TextColor3 = Color3.fromRGB(190, 195, 192), Parent = b})
         end
+        local shp, shpSig
+        local fillCol = T.Dark
+        local rot = 0
+        local function colsList()
+            local cols = o.Colors
+            if cols and #cols >= 2 then return cols end
+            return {o.Color}
+        end
+        -- inside color of the button (also used for the ON / OFF state)
+        local function setFill(col)
+            fillCol = col
+            if shp then shp.SetFill(col) else Tween(b, 0.3, {BackgroundColor3 = col}) end
+        end
         local function apply()
             holder.Size = UDim2.fromOffset(o.W, o.H)
-            b.BackgroundTransparency = o.Transparency
             nameL.Text = o.Name
             st.Thickness = o.Thickness
             st.Transparency = 1 - math.clamp(o.Strength, 0.05, 1)
@@ -1950,21 +2147,47 @@ function Library:CreateWindow(cfg)
             else
                 grad.Color = ColorSequence.new(o.Color)
             end
+            local def = Library.FloatShapes[o.Shape] or Library.FloatShapes.Rounded
+            if def.corner then
+                if shp then shp.Destroy() shp, shpSig = nil, nil end
+                corner.CornerRadius = def.corner
+                st.Enabled = true
+                b.BackgroundTransparency = o.Transparency
+                b.BackgroundColor3 = fillCol
+            else
+                local sig = o.Shape .. "|" .. o.W .. "|" .. o.H .. "|" .. o.Thickness
+                if sig ~= shpSig then
+                    if shp then shp.Destroy() end
+                    shp = Library.BuildPolyShape(holder, def, o.W, o.H, o.Thickness)
+                    shpSig = sig
+                end
+                corner.CornerRadius = UDim.new(0, 0)
+                st.Enabled = false
+                b.BackgroundTransparency = 1
+                shp.SetFill(fillCol)
+                shp.SetFillTransparency(o.Transparency)
+                shp.SetRimTransparency(1 - math.clamp(o.Strength, 0.05, 1))
+                shp.Paint(colsList(), rot)
+            end
         end
         apply()
-        local rot = 0
         local rc
+        local acc = 0
         rc = RS.RenderStepped:Connect(function(dt)
             if not holder:IsDescendantOf(game) then rc:Disconnect() return end
             rot = (rot + dt * o.Speed) % 360
             grad.Rotation = rot
+            if shp and o.Speed > 0 then
+                acc = acc + dt
+                if acc >= 0.05 then acc = 0 shp.Paint(colsList(), rot) end
+            end
         end)
-        return holder, b, st, stateL, apply
+        return holder, b, st, stateL, apply, setFill
     end
 
     local function OpenFloatPanel(info)
         local panel, close = OpenPopup(470, 296)
-        local opts = {Name = info.Name, W = 56, H = 56, Transparency = 0.1, Color = T.Accent, Thickness = 2.5, Speed = 60, Strength = 1, Colors = {}}
+        local opts = {Name = info.Name, W = 56, H = 56, Shape = "Rounded", Transparency = 0.1, Color = T.Accent, Thickness = 2.5, Speed = 60, Strength = 1, Colors = {}}
         local function syncColors()
             local list = {opts.Color}
             if opts.G2 then table.insert(list, opts.G2) end
@@ -2007,8 +2230,8 @@ function Library:CreateWindow(cfg)
             refresh()
         end)
 
-        PLabel(colMain, "Size  (WxH)", 0, 44, 120, 28, Left, 12, T.Sub)
-        local sb = New("TextBox", {AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromOffset(256, 44), Size = UDim2.fromOffset(110, 28), BackgroundColor3 = T.Elem, Text = "56x56", PlaceholderText = "123x123", TextColor3 = T.Text, PlaceholderColor3 = T.Sub, Font = Font.GothamBold, TextSize = 13, ClearTextOnFocus = false, Parent = colMain})
+        PLabel(colMain, "Size  (WxH)", 0, 40, 120, 28, Left, 12, T.Sub)
+        local sb = New("TextBox", {AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromOffset(256, 40), Size = UDim2.fromOffset(110, 28), BackgroundColor3 = T.Elem, Text = "56x56", PlaceholderText = "123x123", TextColor3 = T.Text, PlaceholderColor3 = T.Sub, Font = Font.GothamBold, TextSize = 13, ClearTextOnFocus = false, Parent = colMain})
         Corner(sb, 6)
         local sbst = Stroke(sb, T.Accent, 1.5, 0.2)
         sb.Focused:Connect(function() Tween(sbst, 0.2, {Transparency = 0}) end)
@@ -2025,12 +2248,61 @@ function Library:CreateWindow(cfg)
             refresh()
         end)
 
-        PLabel(colMain, "Transparency", 0, 84, 120, 18, Left, 12, T.Sub)
-        local sl2 = PLabel(colMain, "0.1", 196, 84, 60, 18, Right, 12, T.Accent)
-        local h2 = New("Frame", {Position = UDim2.fromOffset(0, 108), Size = UDim2.fromOffset(256, 18), BackgroundTransparency = 1, Parent = colMain})
+        -- ===== shape dropdown =====
+        PLabel(colMain, "Shape", 0, 76, 60, 28, Left, 12, T.Sub)
+        local shHead = New("TextButton", {Position = UDim2.fromOffset(62, 76), Size = UDim2.fromOffset(194, 28), BackgroundColor3 = T.Elem, Text = "", AutoButtonColor = false, Parent = colMain})
+        Corner(shHead, 6)
+        local shSt = Stroke(shHead, T.Accent, 1.5, 0.2)
+        local shTxt = New("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -34, 1, 0), Font = Font.GothamBold, Text = opts.Shape, TextSize = 12, TextColor3 = T.Text, TextXAlignment = Left, Parent = shHead})
+        local shArrow = New("TextLabel", {BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.fromOffset(16, 16), Font = Font.GothamBlack, Text = "v", TextSize = 12, TextColor3 = T.Accent, Parent = shHead})
+        shHead.MouseEnter:Connect(function() Tween(shSt, 0.2, {Transparency = 0}) end)
+        shHead.MouseLeave:Connect(function() Tween(shSt, 0.2, {Transparency = 0.2}) end)
+        local shList
+        local function pickShape(nm)
+            local def = Library.FloatShapes[nm]
+            if not def then return end
+            opts.Shape = nm
+            shTxt.Text = nm
+            local w, h = opts.W, opts.H
+            if def.sq and w ~= h then
+                local m = math.clamp(math.max(w, h), 30, 300)
+                w, h = m, m
+            elseif def.wide and w == h then
+                w = math.clamp(math.floor(h * def.wide), 30, 300)
+            end
+            if w ~= opts.W or h ~= opts.H then
+                opts.W, opts.H = w, h
+                sb.Text = w .. "x" .. h
+            end
+            if shList then shList.Visible = false shArrow.Text = "v" end
+            refresh()
+        end
+        local function buildShapeList()
+            shList = New("ScrollingFrame", {Position = UDim2.fromOffset(262, 146), Size = UDim2.fromOffset(194, 98), BackgroundColor3 = T.Dark, BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.Accent, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 30, Visible = false, Parent = panel})
+            Corner(shList, 8)
+            Stroke(shList, T.Accent, 1.5, 0.1)
+            New("UIListLayout", {Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder, Parent = shList})
+            New("UIPadding", {PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3), PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 5), Parent = shList})
+            for i, nm in ipairs(Library.FloatShapeOrder) do
+                local row = New("TextButton", {LayoutOrder = i, Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 1, Text = nm, Font = Font.GothamBold, TextSize = 12, TextColor3 = T.Text, AutoButtonColor = false, ZIndex = 31, Parent = shList})
+                Corner(row, 6)
+                row.MouseEnter:Connect(function() Tween(row, 0.15, {BackgroundTransparency = 0.6}) end)
+                row.MouseLeave:Connect(function() Tween(row, 0.2, {BackgroundTransparency = opts.Shape == nm and 0.8 or 1}) end)
+                row.MouseButton1Click:Connect(function() pickShape(nm) end)
+            end
+        end
+        shHead.MouseButton1Click:Connect(function()
+            if not shList then buildShapeList() end
+            shList.Visible = not shList.Visible
+            shArrow.Text = shList.Visible and "^" or "v"
+        end)
+
+        PLabel(colMain, "Transparency", 0, 114, 120, 18, Left, 12, T.Sub)
+        local sl2 = PLabel(colMain, "0.1", 196, 114, 60, 18, Right, 12, T.Accent)
+        local h2 = New("Frame", {Position = UDim2.fromOffset(0, 134), Size = UDim2.fromOffset(256, 18), BackgroundTransparency = 1, Parent = colMain})
         MakeSlider(h2, 0, 0.9, 0.1, 0.05, function(v) opts.Transparency = v refresh() end, sl2)
 
-        local goBorder = New("TextButton", {Position = UDim2.fromOffset(0, 142), Size = UDim2.fromOffset(256, 34), BackgroundColor3 = T.Accent, Text = "Border & Gradient   >", Font = Font.GothamBlack, TextSize = 13, TextColor3 = (0.299 * T.Accent.R + 0.587 * T.Accent.G + 0.114 * T.Accent.B) > 0.6 and BLACK or WHITE, AutoButtonColor = false, Parent = colMain})
+        local goBorder = New("TextButton", {Position = UDim2.fromOffset(0, 160), Size = UDim2.fromOffset(256, 32), BackgroundColor3 = T.Accent, Text = "Border & Gradient   >", Font = Font.GothamBlack, TextSize = 13, TextColor3 = (0.299 * T.Accent.R + 0.587 * T.Accent.G + 0.114 * T.Accent.B) > 0.6 and BLACK or WHITE, AutoButtonColor = false, Parent = colMain})
         Corner(goBorder, 8)
         Stroke(goBorder, WHITE, 1.5, 0.5)
 
@@ -2110,7 +2382,7 @@ function Library:CreateWindow(cfg)
             to.Visible = true
             Tween(to, 0.35, {GroupTransparency = 0, Position = UDim2.fromOffset(200, 40)}, Enum.EasingStyle.Back)
         end
-        goBorder.MouseButton1Click:Connect(function() showBorder(true) end)
+        goBorder.MouseButton1Click:Connect(function() if shList then shList.Visible = false shArrow.Text = "v" end showBorder(true) end)
         back.MouseButton1Click:Connect(function() showBorder(false) end)
 
         local function pbtn(text, x, w, filled, fn)
@@ -2128,7 +2400,7 @@ function Library:CreateWindow(cfg)
             if w then opts.W, opts.H = w, h end
             syncColors()
             close()
-            Window:SpawnFloat(info, {Name = opts.Name, W = opts.W, H = opts.H, Transparency = opts.Transparency, Color = opts.Color, Colors = opts.Colors, Thickness = opts.Thickness, Speed = opts.Speed, Strength = opts.Strength})
+            Window:SpawnFloat(info, {Name = opts.Name, W = opts.W, H = opts.H, Shape = opts.Shape, Transparency = opts.Transparency, Color = opts.Color, Colors = opts.Colors, Thickness = opts.Thickness, Speed = opts.Speed, Strength = opts.Strength})
             Window:SetVisible(false)
         end)
     end
@@ -2136,8 +2408,8 @@ function Library:CreateWindow(cfg)
     -- pos (optional) = saved {xScale, xOffset, yScale, yOffset}
     function Window:SpawnFloat(info, o, pos)
         if Window.Floats[info] then Window.Floats[info]:Destroy() end
-        o = {Name = o.Name or info.Name, W = o.W or o.Size or 56, H = o.H or o.Size or 56, Transparency = o.Transparency or 0.1, Color = o.Color or T.Accent, Colors = o.Colors, Thickness = o.Thickness or 2.5, Speed = o.Speed or 60, Strength = o.Strength or 1}
-        local holder, b, st, stateL = BuildFloat(Gui, o, info.Toggle)
+        o = {Name = o.Name or info.Name, W = o.W or o.Size or 56, H = o.H or o.Size or 56, Shape = o.Shape or "Rounded", Transparency = o.Transparency or 0.1, Color = o.Color or T.Accent, Colors = o.Colors, Thickness = o.Thickness or 2.5, Speed = o.Speed or 60, Strength = o.Strength or 1}
+        local holder, b, st, stateL, _, setFill = BuildFloat(Gui, o, info.Toggle)
         holder.Position = UDim2.new(0.5, 0, 0.3, 0)
         if pos then posApply(holder, pos) end
         local norm = UDim2.fromOffset(o.W, o.H)
@@ -2167,7 +2439,7 @@ function Library:CreateWindow(cfg)
             info.Listen(function(state)
                 if not alive then return end
                 on = state
-                Tween(b, 0.3, {BackgroundColor3 = state and o.Color:Lerp(BLACK, 0.55) or T.Dark})
+                setFill(state and o.Color:Lerp(BLACK, 0.55) or T.Dark)
                 if stateL then
                     stateL.Text = state and "ON" or "OFF"
                     Tween(stateL, 0.3, {TextColor3 = state and o.Color:Lerp(WHITE, 0.4) or Color3.fromRGB(190, 195, 192)})
@@ -2190,7 +2462,7 @@ function Library:CreateWindow(cfg)
             local cols = {}
             for _, c3 in ipairs(o.Colors or {}) do table.insert(cols, c3:ToHex()) end
             return {
-                Key = info.Key or info.Name, Name = o.Name, W = o.W, H = o.H, Transparency = o.Transparency,
+                Key = info.Key or info.Name, Name = o.Name, W = o.W, H = o.H, Shape = o.Shape, Transparency = o.Transparency,
                 Color = o.Color:ToHex(), Colors = cols, Thickness = o.Thickness, Speed = o.Speed, Strength = o.Strength,
                 Pos = posData(holder),
             }
@@ -3344,7 +3616,7 @@ function Library:Intro(c)
     c = c or {}
     local accent = Library.ResolveColor(c.Color)
     local name = c.Name or "VOX HUB"
-    local total = c.Time or 4
+    local total = math.max(c.Time or 4, 5.8)
     local steps = c.Steps or {"Loading assets", "Preparing interface", "Applying theme", "Almost ready"}
     local greet = c.Welcome or "Welcome"
     local who = LP.DisplayName
@@ -3367,9 +3639,11 @@ function Library:Intro(c)
         end)
     end)
 
-    local labels = {}
+    local labels, finals = {}, {}
     local function mk(offset, col, z)
-        local l = New("TextLabel", {Size = UDim2.fromOffset(600, 90), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, offset, 0.5, -15 + offset), BackgroundTransparency = 1, Font = Font.GothamBlack, Text = name, TextColor3 = col, TextSize = 10, TextTransparency = 1, ZIndex = z, Parent = bg})
+        -- starts above the screen, tilted: it falls in, bounces, then straightens up
+        local l = New("TextLabel", {Size = UDim2.fromOffset(600, 90), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, offset, -0.25, -15 + offset), Rotation = -11, BackgroundTransparency = 1, Font = Font.GothamBlack, Text = name, TextColor3 = col, TextSize = 65, TextTransparency = (z == 5) and 0 or 0.35, ZIndex = z, Parent = bg})
+        finals[l] = UDim2.new(0.5, offset, 0.5, -15 + offset)
         table.insert(labels, l)
         return l
     end
@@ -3390,6 +3664,85 @@ function Library:Intro(c)
 
     local welcome = New("TextLabel", {Size = UDim2.fromOffset(520, 26), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 108), BackgroundTransparency = 1, Font = Font.GothamMedium, RichText = true, Text = rich, TextColor3 = Color3.fromRGB(205, 215, 210), TextSize = 18, MaxVisibleGraphemes = 0, Parent = bg})
 
+    -- ---- light sweep (right -> left) then fire on the edges of the name ----
+    local fire = {alive = false}
+    local fireRnd = Random.new()
+    local firePalette = {Color3.fromRGB(255, 238, 120), Color3.fromRGB(255, 178, 45), Color3.fromRGB(255, 112, 16), Color3.fromRGB(232, 58, 10)}
+    local function playSweep()
+        local tw = math.max(vox.TextBounds.X, 220)
+        local th = math.max(vox.TextBounds.Y, 60)
+        local half = tw / 2 + 70
+        local sheen = New("TextLabel", {Size = vox.Size, AnchorPoint = vox.AnchorPoint, Position = vox.Position, BackgroundTransparency = 1, Font = Font.GothamBlack, Text = name, TextColor3 = WHITE, TextSize = 65, ZIndex = 6, Parent = bg})
+        local sgr = New("UIGradient", {Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.4, 1), NumberSequenceKeypoint.new(0.5, 0),
+            NumberSequenceKeypoint.new(0.6, 1), NumberSequenceKeypoint.new(1, 1),
+        }), Offset = Vector2.new(half / 600, 0), Parent = sheen})
+        local beam = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(110, th + 70), Position = UDim2.new(0.5, half, 0.5, -15), Rotation = 14, BackgroundColor3 = accent:Lerp(WHITE, 0.65), BorderSizePixel = 0, ZIndex = 7, Parent = bg})
+        New("UIGradient", {Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.5, 0.3), NumberSequenceKeypoint.new(1, 1),
+        }), Parent = beam})
+        local ti = TweenInfo.new(0.95, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+        TS:Create(sgr, ti, {Offset = Vector2.new(-half / 600, 0)}):Play()
+        TS:Create(beam, ti, {Position = UDim2.new(0.5, -half, 0.5, -15)}):Play()
+        task.delay(0.75, function() TS:Create(beam, TweenInfo.new(0.22), {BackgroundTransparency = 1}):Play() end)
+        Debris:AddItem(sheen, 1.1)
+        Debris:AddItem(beam, 1.1)
+    end
+    local function spawnFlame()
+        local ap, as = vox.AbsolutePosition, vox.AbsoluteSize
+        local cx, cy = ap.X + as.X / 2, ap.Y + as.Y / 2
+        local tw = math.max(vox.TextBounds.X, 200)
+        local th = 44
+        local x, y
+        local r = fireRnd:NextNumber()
+        if r < 0.55 then x, y = cx + fireRnd:NextNumber(-0.5, 0.5) * tw, cy - th / 2 + fireRnd:NextNumber(-3, 6)
+        elseif r < 0.75 then x, y = cx - tw / 2 + fireRnd:NextNumber(-3, 8), cy + fireRnd:NextNumber(-0.5, 0.5) * th
+        elseif r < 0.95 then x, y = cx + tw / 2 + fireRnd:NextNumber(-8, 3), cy + fireRnd:NextNumber(-0.5, 0.5) * th
+        else x, y = cx + fireRnd:NextNumber(-0.5, 0.5) * tw, cy + th / 2 end
+        local w, h = fireRnd:NextNumber(5, 11), fireRnd:NextNumber(12, 22)
+        local f = New("Frame", {AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, h), BackgroundColor3 = firePalette[fireRnd:NextInteger(1, #firePalette)], BorderSizePixel = 0, ZIndex = 8, Parent = bg})
+        Corner(f, 999)
+        New("UIGradient", {Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.35, 0.15), NumberSequenceKeypoint.new(1, 0),
+        }), Rotation = 90, Parent = f})
+        local life = fireRnd:NextNumber(0.45, 0.9)
+        TS:Create(f, TweenInfo.new(life, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            Position = UDim2.fromOffset(x + fireRnd:NextNumber(-9, 9), y - fireRnd:NextNumber(26, 62)),
+            Size = UDim2.fromOffset(w * 0.25, h * 2.2),
+            BackgroundTransparency = 1,
+        }):Play()
+        Debris:AddItem(f, life + 0.05)
+    end
+    local function startFire()
+        fire.alive = true
+        local stroke = New("UIStroke", {Color = WHITE, Thickness = 0, Transparency = 0, ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual, LineJoinMode = Enum.LineJoinMode.Round, Parent = vox})
+        local sgrad = New("UIGradient", {Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 240, 120)),
+            ColorSequenceKeypoint.new(0.45, Color3.fromRGB(255, 130, 15)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(205, 30, 0)),
+        }), Rotation = 90, Parent = stroke})
+        local glow = New("TextLabel", {Size = vox.Size, AnchorPoint = vox.AnchorPoint, Position = vox.Position, BackgroundTransparency = 1, Font = Font.GothamBlack, Text = name, TextColor3 = Color3.fromRGB(255, 120, 20), TextSize = 65, TextTransparency = 1, ZIndex = 4, Parent = bg})
+        local gst = New("UIStroke", {Color = Color3.fromRGB(255, 110, 10), Thickness = 9, Transparency = 1, Parent = glow})
+        fire.stroke, fire.gst = stroke, gst
+        TS:Create(stroke, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Thickness = 3.5}):Play()
+        TS:Create(gst, TweenInfo.new(0.6), {Transparency = 0.72}):Play()
+        task.spawn(function()
+            local acc = 0
+            while fire.alive and sg.Parent do
+                local dt = RS.Heartbeat:Wait()
+                local t = os.clock()
+                stroke.Thickness = 3 + 1.4 * math.sin(t * 17) * math.sin(t * 5.3)
+                sgrad.Offset = Vector2.new(0, 0.12 * math.sin(t * 9))
+                if fire.alive then gst.Transparency = 0.68 + 0.14 * math.sin(t * 13) end
+                acc = acc + dt * 110
+                while acc >= 1 do
+                    acc = acc - 1
+                    spawnFlame()
+                end
+            end
+        end)
+    end
+
     local finished = Instance.new("BindableEvent")
     task.spawn(function()
         task.wait(0.2)
@@ -3397,8 +3750,11 @@ function Library:Intro(c)
         TS:Create(avatar, inInfo, {ImageTransparency = 0}):Play()
         TS:Create(astroke, inInfo, {Transparency = 0}):Play()
         for _, l in ipairs(labels) do
-            TS:Create(l, inInfo, {TextSize = 65, TextTransparency = (l == vox) and 0 or 0.35}):Play()
+            TS:Create(l, TweenInfo.new(1.25, Enum.EasingStyle.Bounce, Enum.EasingDirection.Out), {Position = finals[l]}):Play()
+            TS:Create(l, TweenInfo.new(1.6, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out, 0, false, 0.5), {Rotation = 0}):Play()
         end
+        task.delay(2.0, playSweep)
+        task.delay(3.1, startFire)
         TS:Create(loadBg, inInfo, {BackgroundTransparency = 0}):Play()
         TS:Create(pct, inInfo, {TextTransparency = 0}):Play()
         TS:Create(fill, TweenInfo.new(total, Enum.EasingStyle.Linear), {Size = UDim2.fromScale(1, 1)}):Play()
@@ -3427,6 +3783,9 @@ function Library:Intro(c)
         TS:Create(bg, out, {BackgroundTransparency = 1}):Play()
         TS:Create(avatar, out, {ImageTransparency = 1}):Play()
         TS:Create(astroke, out, {Transparency = 1}):Play()
+        fire.alive = false
+        if fire.stroke then TS:Create(fire.stroke, out, {Transparency = 1}):Play() end
+        if fire.gst then TS:Create(fire.gst, out, {Transparency = 1}):Play() end
         for _, l in ipairs(labels) do TS:Create(l, out, {TextTransparency = 1, TextSize = 75}):Play() end
         TS:Create(loadBg, out, {BackgroundTransparency = 1}):Play()
         TS:Create(fill, out, {BackgroundTransparency = 1}):Play()
