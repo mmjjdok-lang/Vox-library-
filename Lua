@@ -127,26 +127,10 @@ local IconAlias = {
 
 local function ApplyIcon(img, name)
     if name == nil or name == "" then return false end
-    local function direct(v)
-        img.ImageRectSize = Vector2.zero
-        img.ImageRectOffset = Vector2.zero
-        img.Image = v
-        return true
-    end
-    if type(name) == "number" then return direct("rbxassetid://" .. name) end
+    if type(name) == "number" then img.Image = "rbxassetid://" .. name return true end
     if type(name) ~= "string" then return false end
-    name = name:match("^%s*(.-)%s*$")
-    if name == "" then return false end
-    if name:match("^%d+$") then return direct("rbxassetid://" .. name) end
-    local rid = name:match("^[Rr][Bb][Xx][Aa][Ss][Ss][Ee][Tt][Ii][Dd]:?/?/?(%d+)$")
-    if rid then return direct("rbxassetid://" .. rid) end
-    local qid = name:match("[%?&]id=(%d+)")
-    if qid then return direct("rbxassetid://" .. qid) end
-    if name:find("://") then return direct(name) end
-    if name:lower():match("%.[pj][np]e?g$") or name:lower():match("%.webp$") then
-        local ok, asset = pcall(function() if isfile and getcustomasset and isfile(name) then return getcustomasset(name) end end)
-        if ok and asset then return direct(asset) end
-    end
+    if name:match("^%d+$") then img.Image = "rbxassetid://" .. name return true end
+    if name:find("://") then img.Image = name return true end
     if not IconsLib then return false end
     local cands = {name}
     for _, a in ipairs(IconAlias[name] or {}) do table.insert(cands, a) end
@@ -1298,12 +1282,6 @@ function Library:CreateWindow(cfg)
 
     local size = cfg.Size or UDim2.new(0, 550, 0, 356)
     local Holder = New("Frame", {Name = "VOX_Window", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = size, BackgroundTransparency = 1, Parent = Gui})
-    local DevScale = New("UIScale", {Name = "DeviceScale", Parent = Holder})
-    Window.AutoScale = cfg.AutoScale ~= false
-    Window.ScaleMul = 1
-    Window.FloatDev = 1
-    Window.Perf = false
-    Window.Device = "PC"
 
     local layers = {}
     for i = 1, 3 do
@@ -1366,7 +1344,7 @@ function Library:CreateWindow(cfg)
         WConn(RS.RenderStepped, function(dt)
             if not Sea.On or not Window.Visible or Window.Collapsed then return end
             acc = acc + dt
-            if acc < (Window.Perf and 1 / 18 or 1 / 30) then return end
+            if acc < 1 / 30 then return end
             acc = 0
             local t = os.clock()
             for _, L in ipairs(defs) do
@@ -1379,10 +1357,8 @@ function Library:CreateWindow(cfg)
                     if fm then fm.BackgroundTransparency = 0.88 - 0.62 * math.max(0, math.sin(u + t * L.w + L.ph + 1.2)) end
                 end
             end
-            if not Window.Perf then
-                for _, g in ipairs(glitter) do
-                    g.f.BackgroundTransparency = 1 - 0.75 * math.max(0, math.sin(t * g.sp + g.ph))
-                end
+            for _, g in ipairs(glitter) do
+                g.f.BackgroundTransparency = 1 - 0.75 * math.max(0, math.sin(t * g.sp + g.ph))
             end
         end)
     end
@@ -1596,7 +1572,7 @@ function Library:CreateWindow(cfg)
     function Window:SetTitle(s) title.Text = s end
     function Window:SetDescription(s) desc.Text = s end
     function Window:SetIcon(n) wIcon.Visible = ApplyIcon(wIcon, n) end
-    function Window:SetSize(s) size = s Tween(Holder, 0.5, {Size = s}, Enum.EasingStyle.Back) if Window.ApplyDevice then Window:ApplyDevice() end end
+    function Window:SetSize(s) size = s Tween(Holder, 0.5, {Size = s}, Enum.EasingStyle.Back) end
     function Window:Notify(c) Library:Notify(c) end
     function Window:SetClickSound(n)
         if n == nil or n == "" or n == "None" then Library.ClickSound = "None" return end
@@ -1655,7 +1631,6 @@ function Library:CreateWindow(cfg)
                 if m < 8 then Library:PlaySound(Library.ClickSound) Window:SetVisible(not Window.Visible) end
             end})
             Window.OpenButton = OB
-            Window.OBBase = OB.Size
         end
     end
 
@@ -1751,7 +1726,7 @@ function Library:CreateWindow(cfg)
         if not info then return end
         local cols = {}
         for _, hx in ipairs(d.Colors or {}) do table.insert(cols, Color3.fromHex(hx)) end
-        Window:SpawnFloat(info, {Name = d.Name, W = d.W, H = d.H, Shape = d.Shape, Icon = d.Icon, Transparency = d.Transparency, Color = Color3.fromHex(d.Color), Colors = cols, Thickness = d.Thickness, Speed = d.Speed, Strength = d.Strength}, d.Pos)
+        Window:SpawnFloat(info, {Name = d.Name, W = d.W, H = d.H, Shape = d.Shape, Transparency = d.Transparency, Color = Color3.fromHex(d.Color), Colors = cols, Thickness = d.Thickness, Speed = d.Speed, Strength = d.Strength}, d.Pos)
     end
     -- every floating button (its look, position, on/off) is brought back as soon as its toggle exists
     function Window.OnFloatInfo(info)
@@ -2127,22 +2102,18 @@ function Library:CreateWindow(cfg)
         return math.clamp(tonumber(a), 30, 300), math.clamp(tonumber(b), 30, 300)
     end
 
-    -- builds a floating button. o = {Name, W, H, Shape, Icon, Transparency, Color, Colors, Thickness, Speed, Strength}
-    -- size <= 36: always a small circle with a tiny name.  Icon = icon name / image id / rbxassetid / url / workspace file
+    -- builds a floating button. o = {Name, W, H, Shape, Transparency, Color, Colors, Thickness, Speed, Strength}
     local function BuildFloat(parent, o, toggle)
         o.Thickness = o.Thickness or 2.5
         o.Speed = o.Speed or 60
         o.Strength = o.Strength or 1
         o.Shape = Library.FloatShapes[o.Shape] and o.Shape or "Rounded"
-        local real = (parent == Gui)
         local holder = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(o.W, o.H), BackgroundTransparency = 1, Parent = parent})
         local b = New("TextButton", {Name = "VOX_Float", Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Dark, BackgroundTransparency = o.Transparency, Text = "", AutoButtonColor = false, ZIndex = 5, NoSound = true, Parent = holder})
         local corner = Corner(b, 14)
         local st = Stroke(b, WHITE, o.Thickness, 0)
         local grad = New("UIGradient", {Parent = st})
-        local iconL = New("ImageLabel", {AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, ImageColor3 = WHITE, Visible = false, Parent = b})
-        local nameL = New("TextLabel", {BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Font = Font.GothamBold, Text = o.Name, TextScaled = true, TextSize = 12, TextColor3 = WHITE, TextWrapped = true, Parent = b})
-        local tsc = New("UITextSizeConstraint", {MaxTextSize = 12, MinTextSize = 5, Parent = nameL})
+        local nameL = New("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromScale(0, toggle and -0.08 or 0), Size = UDim2.fromScale(1, 1), Font = Font.GothamBold, Text = o.Name, TextSize = 12, TextColor3 = WHITE, TextWrapped = true, Parent = b})
         local stateL
         if toggle then
             stateL = New("TextLabel", {AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -4), Size = UDim2.new(1, 0, 0, 12), BackgroundTransparency = 1, Font = Font.GothamBlack, Text = "OFF", TextSize = 10, TextColor3 = Color3.fromRGB(190, 195, 192), Parent = b})
@@ -2150,7 +2121,6 @@ function Library:CreateWindow(cfg)
         local shp, shpSig
         local fillCol = T.Dark
         local rot = 0
-        local lastIcon, hasIcon = nil, false
         local function colsList()
             local cols = o.Colors
             if cols and #cols >= 2 then return cols end
@@ -2162,10 +2132,8 @@ function Library:CreateWindow(cfg)
             if shp then shp.SetFill(col) else Tween(b, 0.3, {BackgroundColor3 = col}) end
         end
         local function apply()
-            local dev = real and (Window.FloatDev or 1) or 1
-            local W, H = o.W * dev, o.H * dev
-            local m = math.min(W, H)
-            holder.Size = UDim2.fromOffset(W, H)
+            holder.Size = UDim2.fromOffset(o.W, o.H)
+            nameL.Text = o.Name
             st.Thickness = o.Thickness
             st.Transparency = 1 - math.clamp(o.Strength, 0.05, 1)
             local cols = o.Colors
@@ -2179,41 +2147,7 @@ function Library:CreateWindow(cfg)
             else
                 grad.Color = ColorSequence.new(o.Color)
             end
-            -- tiny button -> always a small circle
-            local small = math.max(o.W, o.H) <= 36
-            local def = small and Library.FloatShapes.Circle or (Library.FloatShapes[o.Shape] or Library.FloatShapes.Rounded)
-            -- icon
-            if o.Icon ~= lastIcon then
-                lastIcon = o.Icon
-                iconL.Image = ""
-                iconL.ImageRectSize = Vector2.zero
-                iconL.ImageRectOffset = Vector2.zero
-                hasIcon = (o.Icon ~= nil and o.Icon ~= "") and ApplyIcon(iconL, o.Icon) or false
-            end
-            -- text / icon layout: always inside the shape, never cramped
-            local showState = toggle and m >= 50
-            local showName = (not hasIcon) or m >= 60
-            local round = (def.corner and def.corner.Scale > 0.25) or (not def.corner)
-            local inset = round and 0.16 or 0.04
-            nameL.Text = o.Name
-            nameL.Visible = showName
-            tsc.MaxTextSize = math.clamp(math.floor(m / 4.6), 7, 14)
-            if hasIcon then
-                local isz = math.clamp(m * (showName and 0.42 or 0.58), 8, 140)
-                iconL.Visible = true
-                iconL.Size = UDim2.fromOffset(isz, isz)
-                iconL.Position = UDim2.new(0.5, 0, showName and 0.36 or (showState and 0.42 or 0.5), 0)
-                nameL.Position = UDim2.new(inset, 0, 0.62, 0)
-                nameL.Size = UDim2.new(1 - 2 * inset, 0, 0.22, 0)
-            else
-                iconL.Visible = false
-                nameL.Position = UDim2.new(inset, 0, 0, showState and -m * 0.06 or 0)
-                nameL.Size = UDim2.new(1 - 2 * inset, 0, 1, 0)
-            end
-            if stateL then
-                stateL.Visible = showState
-                stateL.TextSize = math.clamp(math.floor(m / 6), 7, 10)
-            end
+            local def = Library.FloatShapes[o.Shape] or Library.FloatShapes.Rounded
             if def.corner then
                 if shp then shp.Destroy() shp, shpSig = nil, nil end
                 corner.CornerRadius = def.corner
@@ -2245,14 +2179,14 @@ function Library:CreateWindow(cfg)
             grad.Rotation = rot
             if shp and o.Speed > 0 then
                 acc = acc + dt
-                if acc >= (Window.Perf and 0.1 or 0.05) then acc = 0 shp.Paint(colsList(), rot) end
+                if acc >= 0.05 then acc = 0 shp.Paint(colsList(), rot) end
             end
         end)
         return holder, b, st, stateL, apply, setFill
     end
 
     local function OpenFloatPanel(info)
-        local panel, close = OpenPopup(470, 330)
+        local panel, close = OpenPopup(470, 296)
         local opts = {Name = info.Name, W = 56, H = 56, Shape = "Rounded", Transparency = 0.1, Color = T.Accent, Thickness = 2.5, Speed = 60, Strength = 1, Colors = {}}
         local function syncColors()
             local list = {opts.Color}
@@ -2264,14 +2198,14 @@ function Library:CreateWindow(cfg)
         PLabel(panel, info.Toggle and "Floating Toggle" or "Floating Button", 14, 10, 300, 20, Left, 14, T.Text, Font.GothamBlack)
 
         -- preview square (shows the real button; every change updates it live)
-        local area = New("Frame", {Position = UDim2.fromOffset(14, 40), Size = UDim2.fromOffset(172, 224), BackgroundColor3 = T.Elem, BorderSizePixel = 0, ClipsDescendants = true, Parent = panel})
+        local area = New("Frame", {Position = UDim2.fromOffset(14, 40), Size = UDim2.fromOffset(172, 190), BackgroundColor3 = T.Elem, BorderSizePixel = 0, ClipsDescendants = true, Parent = panel})
         Corner(area, 12)
         Stroke(area, T.Accent, 2, 0.1)
         PLabel(area, "PREVIEW", 0, 8, 172, 14, Center, 10, T.Sub, Font.GothamBlack)
         local pvHolder, pvBtn, pvSt, pvState, pvApply = BuildFloat(area, opts, info.Toggle)
         pvHolder.Position = UDim2.new(0.5, 0, 0.5, 4)
         local pvScale = New("UIScale", {Parent = pvHolder})
-        local cap = PLabel(area, "56 x 56", 0, 202, 172, 16, Center, 12, T.Accent, Font.GothamBold)
+        local cap = PLabel(area, "56 x 56", 0, 168, 172, 16, Center, 12, T.Accent, Font.GothamBold)
         local function refresh()
             syncColors()
             pvApply()
@@ -2280,7 +2214,7 @@ function Library:CreateWindow(cfg)
         end
         refresh()
 
-        local pageSize = UDim2.fromOffset(256, 230)
+        local pageSize = UDim2.fromOffset(256, 196)
         local colMain = New("CanvasGroup", {Position = UDim2.fromOffset(200, 40), Size = pageSize, BackgroundTransparency = 1, Parent = panel})
         local colBorder = New("CanvasGroup", {Position = UDim2.fromOffset(240, 40), Size = pageSize, BackgroundTransparency = 1, GroupTransparency = 1, Visible = false, Parent = panel})
 
@@ -2344,7 +2278,7 @@ function Library:CreateWindow(cfg)
             refresh()
         end
         local function buildShapeList()
-            shList = New("ScrollingFrame", {Position = UDim2.fromOffset(262, 146), Size = UDim2.fromOffset(194, 120), BackgroundColor3 = T.Dark, BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.Accent, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 30, Visible = false, Parent = panel})
+            shList = New("ScrollingFrame", {Position = UDim2.fromOffset(262, 146), Size = UDim2.fromOffset(194, 98), BackgroundColor3 = T.Dark, BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.Accent, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 30, Visible = false, Parent = panel})
             Corner(shList, 8)
             Stroke(shList, T.Accent, 1.5, 0.1)
             New("UIListLayout", {Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder, Parent = shList})
@@ -2363,31 +2297,12 @@ function Library:CreateWindow(cfg)
             shArrow.Text = shList.Visible and "^" or "v"
         end)
 
-        -- ===== icon: name (lucide), image id, rbxassetid://, url or a file in workspace =====
-        PLabel(colMain, "Icon", 0, 112, 60, 28, Left, 12, T.Sub)
-        local ib = New("TextBox", {Position = UDim2.fromOffset(62, 112), Size = UDim2.fromOffset(194, 28), BackgroundColor3 = T.Elem, Text = "", PlaceholderText = "icon name / image ID", TextColor3 = T.Text, PlaceholderColor3 = T.Sub, Font = Font.GothamMedium, TextSize = 12, ClearTextOnFocus = false, Parent = colMain})
-        Corner(ib, 6)
-        local ist = Stroke(ib, T.Accent, 1.5, 0.2)
-        ib.Focused:Connect(function() Tween(ist, 0.2, {Transparency = 0}) end)
-        ib.FocusLost:Connect(function() Tween(ist, 0.2, {Transparency = 0.2}) end)
-        local itoken = 0
-        ib:GetPropertyChangedSignal("Text"):Connect(function()
-            itoken = itoken + 1
-            local my = itoken
-            task.delay(0.35, function()
-                if my ~= itoken then return end
-                local txt = ib.Text:match("^%s*(.-)%s*$")
-                opts.Icon = txt ~= "" and txt or nil
-                refresh()
-            end)
-        end)
-
-        PLabel(colMain, "Transparency", 0, 148, 120, 18, Left, 12, T.Sub)
-        local sl2 = PLabel(colMain, "0.1", 196, 148, 60, 18, Right, 12, T.Accent)
-        local h2 = New("Frame", {Position = UDim2.fromOffset(0, 168), Size = UDim2.fromOffset(256, 18), BackgroundTransparency = 1, Parent = colMain})
+        PLabel(colMain, "Transparency", 0, 114, 120, 18, Left, 12, T.Sub)
+        local sl2 = PLabel(colMain, "0.1", 196, 114, 60, 18, Right, 12, T.Accent)
+        local h2 = New("Frame", {Position = UDim2.fromOffset(0, 134), Size = UDim2.fromOffset(256, 18), BackgroundTransparency = 1, Parent = colMain})
         MakeSlider(h2, 0, 0.9, 0.1, 0.05, function(v) opts.Transparency = v refresh() end, sl2)
 
-        local goBorder = New("TextButton", {Position = UDim2.fromOffset(0, 194), Size = UDim2.fromOffset(256, 32), BackgroundColor3 = T.Accent, Text = "Border & Gradient   >", Font = Font.GothamBlack, TextSize = 13, TextColor3 = (0.299 * T.Accent.R + 0.587 * T.Accent.G + 0.114 * T.Accent.B) > 0.6 and BLACK or WHITE, AutoButtonColor = false, Parent = colMain})
+        local goBorder = New("TextButton", {Position = UDim2.fromOffset(0, 160), Size = UDim2.fromOffset(256, 32), BackgroundColor3 = T.Accent, Text = "Border & Gradient   >", Font = Font.GothamBlack, TextSize = 13, TextColor3 = (0.299 * T.Accent.R + 0.587 * T.Accent.G + 0.114 * T.Accent.B) > 0.6 and BLACK or WHITE, AutoButtonColor = false, Parent = colMain})
         Corner(goBorder, 8)
         Stroke(goBorder, WHITE, 1.5, 0.5)
 
@@ -2471,7 +2386,7 @@ function Library:CreateWindow(cfg)
         back.MouseButton1Click:Connect(function() showBorder(false) end)
 
         local function pbtn(text, x, w, filled, fn)
-            local b = New("TextButton", {Position = UDim2.fromOffset(x, 282), Size = UDim2.fromOffset(w, 36), BackgroundColor3 = T.Accent, BackgroundTransparency = filled and 0 or 0.55, Text = text, Font = Font.GothamBlack, TextSize = 12, TextColor3 = filled and BLACK or T.Text, TextWrapped = true, AutoButtonColor = false, Parent = panel})
+            local b = New("TextButton", {Position = UDim2.fromOffset(x, 246), Size = UDim2.fromOffset(w, 36), BackgroundColor3 = T.Accent, BackgroundTransparency = filled and 0 or 0.55, Text = text, Font = Font.GothamBlack, TextSize = 12, TextColor3 = filled and BLACK or T.Text, TextWrapped = true, AutoButtonColor = false, Parent = panel})
             Corner(b, 8)
             Stroke(b, T.Accent, 1.5, 0.1)
             local bs = New("UIScale", {Parent = b})
@@ -2485,66 +2400,19 @@ function Library:CreateWindow(cfg)
             if w then opts.W, opts.H = w, h end
             syncColors()
             close()
-            Window:SpawnFloat(info, {Name = opts.Name, W = opts.W, H = opts.H, Shape = opts.Shape, Icon = opts.Icon, Transparency = opts.Transparency, Color = opts.Color, Colors = opts.Colors, Thickness = opts.Thickness, Speed = opts.Speed, Strength = opts.Strength})
+            Window:SpawnFloat(info, {Name = opts.Name, W = opts.W, H = opts.H, Shape = opts.Shape, Transparency = opts.Transparency, Color = opts.Color, Colors = opts.Colors, Thickness = opts.Thickness, Speed = opts.Speed, Strength = opts.Strength})
             Window:SetVisible(false)
         end)
-    end
-
-    -- first free spot, starting top-left; every new button goes right next to the previous one (8px gap)
-    -- and wraps to a new row when the line is full
-    function Window.NextFloatSlot(w, h)
-        local gap, mx, my = 8, 8, 8
-        local vp = Gui.AbsoluteSize
-        local origin = Vector2.zero
-        pcall(function() origin = Gui.AbsolutePosition end)
-        local rects = {}
-        for _, fl in pairs(Window.Floats) do
-            local hd = fl.Holder
-            if hd and hd.Parent then
-                local fw, fh = fl.Size()
-                local c = hd.AbsolutePosition - origin + hd.AbsoluteSize / 2
-                table.insert(rects, {c.X - fw / 2, c.Y - fh / 2, c.X + fw / 2, c.Y + fh / 2})
-            end
-        end
-        local xs, ys = {mx}, {my}
-        for _, r in ipairs(rects) do
-            table.insert(xs, r[3] + gap)
-            table.insert(ys, r[4] + gap)
-        end
-        table.sort(xs)
-        table.sort(ys)
-        for _, y in ipairs(ys) do
-            for _, x in ipairs(xs) do
-                if x + w <= vp.X - mx and y + h <= vp.Y - my then
-                    local free = true
-                    for _, r in ipairs(rects) do
-                        if x < r[3] + gap - 0.5 and x + w > r[1] - gap + 0.5 and y < r[4] + gap - 0.5 and y + h > r[2] - gap + 0.5 then
-                            free = false
-                            break
-                        end
-                    end
-                    if free then return x + w / 2, y + h / 2 end
-                end
-            end
-        end
-        return vp.X / 2, vp.Y * 0.3
     end
 
     -- pos (optional) = saved {xScale, xOffset, yScale, yOffset}
     function Window:SpawnFloat(info, o, pos)
         if Window.Floats[info] then Window.Floats[info]:Destroy() end
-        o = {Name = o.Name or info.Name, W = o.W or o.Size or 56, H = o.H or o.Size or 56, Shape = o.Shape or "Rounded", Icon = o.Icon, Transparency = o.Transparency or 0.1, Color = o.Color or T.Accent, Colors = o.Colors, Thickness = o.Thickness or 2.5, Speed = o.Speed or 60, Strength = o.Strength or 1}
-        local holder, b, st, stateL, fapply, setFill = BuildFloat(Gui, o, info.Toggle)
-        local function getNorm() local d = Window.FloatDev or 1 return UDim2.fromOffset(o.W * d, o.H * d) end
-        if pos then
-            holder.Position = UDim2.new(0.5, 0, 0.3, 0)
-            posApply(holder, pos)
-        else
-            local d = Window.FloatDev or 1
-            local sx, sy = Window.NextFloatSlot(o.W * d, o.H * d)
-            holder.Position = UDim2.fromOffset(sx, sy)
-        end
-        local norm = getNorm()
+        o = {Name = o.Name or info.Name, W = o.W or o.Size or 56, H = o.H or o.Size or 56, Shape = o.Shape or "Rounded", Transparency = o.Transparency or 0.1, Color = o.Color or T.Accent, Colors = o.Colors, Thickness = o.Thickness or 2.5, Speed = o.Speed or 60, Strength = o.Strength or 1}
+        local holder, b, st, stateL, _, setFill = BuildFloat(Gui, o, info.Toggle)
+        holder.Position = UDim2.new(0.5, 0, 0.3, 0)
+        if pos then posApply(holder, pos) end
+        local norm = UDim2.fromOffset(o.W, o.H)
         local th = o.Thickness
         local sc = New("UIScale", {Scale = 0, Parent = holder})
         Tween(sc, 0.6, {Scale = 1}, Enum.EasingStyle.Elastic)
@@ -2554,9 +2422,8 @@ function Library:CreateWindow(cfg)
             if pulsing then return end
             pulsing = true
             task.spawn(function()
-                local fd = Window.FloatDev or 1
-                local big = UDim2.fromOffset(o.W * 1.16 * fd, o.H * 1.16 * fd)
-                local mid = UDim2.fromOffset(o.W * 1.08 * fd, o.H * 1.08 * fd)
+                local big = UDim2.fromOffset(o.W * 1.16, o.H * 1.16)
+                local mid = UDim2.fromOffset(o.W * 1.08, o.H * 1.08)
                 local sine = Enum.EasingStyle.Sine
                 while alive and on do
                     Tween(holder, 0.12, {Size = big}, sine) Tween(st, 0.12, {Thickness = th * 2}, sine) task.wait(0.13)
@@ -2582,9 +2449,7 @@ function Library:CreateWindow(cfg)
         end
 
         local dragObj
-        local obj = {Holder = holder}
-        function obj.Size() local d = Window.FloatDev or 1 return o.W * d, o.H * d end
-        function obj:Rescale() norm = getNorm() fapply() end
+        local obj = {}
         function obj:Destroy()
             alive = false
             Window.Floats[info] = nil
@@ -2597,7 +2462,7 @@ function Library:CreateWindow(cfg)
             local cols = {}
             for _, c3 in ipairs(o.Colors or {}) do table.insert(cols, c3:ToHex()) end
             return {
-                Key = info.Key or info.Name, Name = o.Name, W = o.W, H = o.H, Shape = o.Shape, Icon = o.Icon, Transparency = o.Transparency,
+                Key = info.Key or info.Name, Name = o.Name, W = o.W, H = o.H, Shape = o.Shape, Transparency = o.Transparency,
                 Color = o.Color:ToHex(), Colors = cols, Thickness = o.Thickness, Speed = o.Speed, Strength = o.Strength,
                 Pos = posData(holder),
             }
@@ -3441,9 +3306,6 @@ function Library:CreateWindow(cfg)
                 if v and not Window.Loading then Window:SetColor(v) end
             end})
             Tab:Slider({Name = "UI Transparency", Min = 0, Max = 0.9, Default = curTrans, Increment = 0.05, Flag = "UI_Transparency", Callback = function(v) Window:SetTransparency(v) end})
-            Tab:Toggle({Name = "Auto Device Scale", Desc = "Phone = smaller UI + buttons, tablet / PC = a bit bigger", Default = Window.AutoScale, MiniButton = false, Flag = "UI_AutoScale", Callback = function(v) Window.AutoScale = v and true or false Window:ApplyDevice() end})
-            Tab:Slider({Name = "UI Scale", Min = 0.6, Max = 1.4, Default = Window.ScaleMul or 1, Increment = 0.05, Flag = "UI_ScaleMul", Callback = function(v) Window.ScaleMul = v Window:ApplyDevice() end})
-            Tab:Toggle({Name = "Performance Mode", Desc = "Lighter animations for more FPS (turns on by itself on phones)", Default = Window.Perf, MiniButton = false, Flag = "UI_Perf", Callback = function(v) Window.PerfManual = v and true or false Window.Perf = Window.PerfManual end})
             Tab:Toggle({Name = "Sea Waves", Desc = "Real animated sea inside the frame", Default = Window and Sea.On, MiniButton = false, Flag = "UI_Sea", Callback = function(v) Window:SetSea(v) end})
             Tab:Section("Sound")
             Tab:Toggle({Name = "UI Sounds", Default = Library.SoundEnabled, MiniButton = false, Flag = "UI_Sound", Callback = function(v) Library.SoundEnabled = v end})
@@ -3732,47 +3594,6 @@ function Library:CreateWindow(cfg)
         if #Window.Tabs == 1 then task.delay(0.1, function() Select(Tab) end) end
         return Tab
     end
-
-    -- ======================================================
-    -- Device adaption:  phone -> smaller window / open button / floating buttons (clear view)
-    --                   tablet -> normal,  PC -> a little bigger.  Never bigger than the screen.
-    -- cfg.PhoneScale / cfg.TabletScale / cfg.PCScale change the factors, cfg.AutoScale = false turns it off
-    -- ======================================================
-    function Window:ApplyDevice(instant)
-        local vp = Gui.AbsoluteSize
-        local dev = "PC"
-        if UIS.TouchEnabled and not UIS.KeyboardEnabled then
-            dev = (math.min(vp.X, vp.Y) < 600) and "Phone" or "Tablet"
-        end
-        Window.Device = dev
-        local auto = Window.AutoScale
-        local base = 1
-        if auto then
-            base = (dev == "Phone" and (cfg.PhoneScale or 0.72)) or (dev == "Tablet" and (cfg.TabletScale or 1)) or (cfg.PCScale or 1.1)
-        end
-        local sc = base * (Window.ScaleMul or 1)
-        local w, h = size.X.Offset, size.Y.Offset
-        if vp.X > 100 and vp.Y > 100 and w > 0 and h > 0 then
-            sc = math.min(sc, (vp.X - 16) / w, (vp.Y - 16) / h)
-        end
-        sc = math.max(sc, 0.4)
-        if instant then DevScale.Scale = sc else Tween(DevScale, 0.3, {Scale = sc}) end
-        Window.FloatDev = auto and ((dev == "Phone" and 0.85) or (dev == "Tablet" and 1) or 1.05) or 1
-        local f = (auto and dev == "Phone") and 0.82 or 1
-        if Window.OpenButton and Window.OBBase then
-            local bs = Window.OBBase
-            Window.OpenButton.Size = UDim2.new(bs.X.Scale, bs.X.Offset * f, bs.Y.Scale, bs.Y.Offset * f)
-        end
-        for _, fl in pairs(Window.Floats) do pcall(fl.Rescale, fl) end
-        if Window.PerfManual ~= nil then Window.Perf = Window.PerfManual else Window.Perf = (dev == "Phone") end
-    end
-    local devToken = 0
-    WConn(Gui:GetPropertyChangedSignal("AbsoluteSize"), function()
-        devToken = devToken + 1
-        local my = devToken
-        task.delay(0.3, function() if my == devToken then Window:ApplyDevice() end end)
-    end)
-    Window:ApplyDevice(true)
 
     -- put back the saved window state and the saved skin
     task.delay(1.0, function()
