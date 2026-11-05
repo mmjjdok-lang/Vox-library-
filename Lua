@@ -1,4 +1,5 @@
 if not game:IsLoaded() then game.Loaded:Wait() end
+local __vox_ok, __vox_res = pcall(function()
 
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
@@ -9,6 +10,10 @@ local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 local SoundService = game:GetService("SoundService")
 local LP = Players.LocalPlayer
+if not LP then
+    pcall(function() Players:GetPropertyChangedSignal("LocalPlayer"):Wait() end)
+    LP = Players.LocalPlayer
+end
 
 local Font = Enum.Font
 local Left, Right, Center = Enum.TextXAlignment.Left, Enum.TextXAlignment.Right, Enum.TextXAlignment.Center
@@ -127,10 +132,26 @@ local IconAlias = {
 
 local function ApplyIcon(img, name)
     if name == nil or name == "" then return false end
-    if type(name) == "number" then img.Image = "rbxassetid://" .. name return true end
+    local function direct(v)
+        img.ImageRectSize = Vector2.zero
+        img.ImageRectOffset = Vector2.zero
+        img.Image = v
+        return true
+    end
+    if type(name) == "number" then return direct("rbxassetid://" .. name) end
     if type(name) ~= "string" then return false end
-    if name:match("^%d+$") then img.Image = "rbxassetid://" .. name return true end
-    if name:find("://") then img.Image = name return true end
+    name = name:match("^%s*(.-)%s*$")
+    if name == "" then return false end
+    if name:match("^%d+$") then return direct("rbxassetid://" .. name) end
+    local rid = name:match("^[Rr][Bb][Xx][Aa][Ss][Ss][Ee][Tt][Ii][Dd]:?/?/?(%d+)$")
+    if rid then return direct("rbxassetid://" .. rid) end
+    local qid = name:match("[%?&]id=(%d+)")
+    if qid then return direct("rbxassetid://" .. qid) end
+    if name:find("://") then return direct(name) end
+    if name:lower():match("%.[pj][np]e?g$") or name:lower():match("%.webp$") then
+        local ok, asset = pcall(function() if isfile and getcustomasset and isfile(name) then return getcustomasset(name) end end)
+        if ok and asset then return direct(asset) end
+    end
     if not IconsLib then return false end
     local cands = {name}
     for _, a in ipairs(IconAlias[name] or {}) do table.insert(cands, a) end
@@ -157,9 +178,21 @@ local function ApplyIcon(img, name)
     return false
 end
 
+-- total UIScale applied to an element (its own + all parents): screen pixels / this = local units
+local function EffScale(inst)
+    local sc = 1
+    local p = inst
+    while p and p ~= game do
+        local u = p:FindFirstChildOfClass("UIScale")
+        if u then sc = sc * u.Scale end
+        p = p.Parent
+    end
+    return math.max(sc, 0.01)
+end
+
 local function Ripple(layer, pos, color, maxS)
     maxS = maxS or 240
-    local rel = pos - layer.AbsolutePosition
+    local rel = (pos - layer.AbsolutePosition) / EffScale(layer)
     local function circle(tr)
         local c = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(rel.X, rel.Y), Size = UDim2.fromOffset(6, 6), BackgroundColor3 = color, BackgroundTransparency = tr, BorderSizePixel = 0, ZIndex = 100, Parent = layer})
         Corner(c, 999)
@@ -268,7 +301,7 @@ end
 local Library = {Themes = {}, Map = {}}
 
 local ThemeData = {
-    {"Ocean", 34, 124, 255}, {"Green", 0, 255, 100}, {"Emerald", 16, 185, 129}, {"Lime", 132, 204, 22}, {"Mint", 110, 231, 183},
+    {"Black", 205, 210, 222}, {"Ocean", 34, 124, 255}, {"Green", 0, 255, 100}, {"Emerald", 16, 185, 129}, {"Lime", 132, 204, 22}, {"Mint", 110, 231, 183},
     {"Teal", 20, 184, 166}, {"Cyan", 6, 182, 212}, {"Sky", 56, 189, 248}, {"Blue", 59, 130, 246},
     {"Royal", 65, 105, 225}, {"Indigo", 99, 102, 241}, {"Violet", 139, 92, 246}, {"Purple", 168, 85, 247},
     {"Magenta", 217, 70, 239}, {"Pink", 236, 72, 153}, {"Rose", 244, 63, 94}, {"Red", 239, 68, 68},
@@ -293,6 +326,10 @@ function Library.ResolveColor(c)
 end
 Library.Accent = Library.Themes[1].Color
 Library.Second = {ocean = Color3.fromRGB(25, 215, 130)}
+-- surfaces of the pure black theme (real black, not tinted)
+Library.Surfaces = {
+    black = {Dark = Color3.fromRGB(6, 6, 8), Deep = Color3.fromRGB(10, 10, 13), Mid = Color3.fromRGB(13, 13, 16), Elem = Color3.fromRGB(20, 20, 25)},
+}
 
 Clean("VOX_UI")
 Gui = New("ScreenGui", {Name = "VOX_UI", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999})
@@ -775,6 +812,17 @@ function Skin.Restore(t)
 end
 
 function Skin.Import(t) Skin.Restore(t) end
+
+for _, fnName in ipairs({"Apply", "SetColor", "Reapply", "Set"}) do
+    local orig = Skin[fnName]
+    if type(orig) == "function" then
+        Skin[fnName] = function(...)
+            local r = table.pack(orig(...))
+            Skin.Dirty = os.clock()
+            return table.unpack(r, 1, r.n)
+        end
+    end
+end
 
 -- after you respawn: skin, color and effects come back by themselves (the skin page does not need to be open)
 Conn(LP.CharacterAdded, function(char)
@@ -1263,7 +1311,8 @@ function Library:CreateWindow(cfg)
     local T = {}
     local curTrans = cfg.Transparency or 0.05
     local function SetT(col)
-        local key = type(col) == "string" and col:lower() or (col == nil and Library.Themes[1].Name:lower() or nil)
+        if col == nil then col = "Black" end
+        local key = type(col) == "string" and col:lower() or nil
         col = Library.ResolveColor(col)
         T.Second = (key and Library.Second[key]) or col
         T.Accent = col
@@ -1275,6 +1324,8 @@ function Library:CreateWindow(cfg)
         T.Elem = Color3.fromHSV(h, s * 0.65, 0.50)
         T.Text = Color3.fromRGB(250, 252, 251)
         T.Sub = Color3.fromRGB(215, 222, 218)
+        local sf = key and Library.Surfaces[key]
+        if sf then T.Dark, T.Deep, T.Mid, T.Elem = sf.Dark, sf.Deep, sf.Mid, sf.Elem end
     end
     SetT(cfg.Color)
     Library.Accent = T.Accent
@@ -1282,6 +1333,12 @@ function Library:CreateWindow(cfg)
 
     local size = cfg.Size or UDim2.new(0, 550, 0, 356)
     local Holder = New("Frame", {Name = "VOX_Window", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = size, BackgroundTransparency = 1, Parent = Gui})
+    local DevScale = New("UIScale", {Name = "DeviceScale", Parent = Holder})
+    Window.AutoScale = cfg.AutoScale ~= false
+    Window.ScaleMul = 1
+    Window.FloatDev = 1
+    Window.Perf = false
+    Window.Device = "PC"
 
     local layers = {}
     for i = 1, 3 do
@@ -1310,55 +1367,228 @@ function Library:CreateWindow(cfg)
 
 
     -- ======================================================
-    -- Real sea inside the frame: 3 layers of moving water, crest foam and sun glitter
-    -- (built from thin water columns that follow real sine waves, not a flat effect)
+    -- CINEMATIC HARBOR (night, pure black):  moon + stars + drifting clouds, far island,
+    -- 3 layers of real waves, a wooden pier with lanterns and STAIRS going down to a boat,
+    -- people walking the pier, down the stairs and boarding, the boat bobbing on the water,
+    -- moon reflection on the sea, fog and a dark vignette.
     -- ======================================================
     local Sea = {On = (cfg.Sea ~= false) and Library.SeaEnabled ~= false}
     do
-        local N = 36
-        local defs = {
-            {base = 0.40, amp = 0.030, k = 1.6, w = 0.8, ph = 0.0, top = Color3.fromRGB(30, 118, 190), bot = Color3.fromRGB(3, 22, 56), tr = 0.40},
-            {base = 0.32, amp = 0.036, k = 2.3, w = -1.1, ph = 1.7, top = Color3.fromRGB(40, 158, 216), bot = Color3.fromRGB(7, 48, 100), tr = 0.32},
-            {base = 0.23, amp = 0.042, k = 3.2, w = 1.5, ph = 3.1, top = Color3.fromRGB(78, 210, 232), bot = Color3.fromRGB(11, 80, 138), tr = 0.22, foam = true},
-        }
+        local function rgb(r, g, bb) return Color3.fromRGB(r, g, bb) end
+        local CSK = ColorSequenceKeypoint.new
+        local rnd = Random.new(11)
+        local N = 30
         local box = New("Frame", {Name = "Sea", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 1, Visible = Sea.On, Parent = Main})
         Sea.Box = box
+        local function G(z) return New("Frame", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = z, Parent = box}) end
+        local function Bx(parent, x, y, w, h, col, tr, z, round)
+            local f = New("Frame", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, h), BackgroundColor3 = col, BackgroundTransparency = tr or 0, BorderSizePixel = 0, ZIndex = z or 1, Parent = parent})
+            if round then Corner(f, round) end
+            return f
+        end
+
+        -- ---------- sky, stars, moon, clouds, island ----------
+        local gSky = G(1)
+        local sky = New("Frame", {Size = UDim2.fromScale(1, 0.68), BackgroundColor3 = WHITE, BorderSizePixel = 0, Parent = gSky})
+        New("UIGradient", {Color = ColorSequence.new({CSK(0, rgb(2, 2, 5)), CSK(0.55, rgb(8, 11, 22)), CSK(1, rgb(24, 38, 60))}), Rotation = 90, Parent = sky})
+        local stars = {}
+        for i = 1, 44 do
+            local sz = rnd:NextInteger(1, 2)
+            local f = New("Frame", {Position = UDim2.fromScale(rnd:NextNumber(0.01, 0.99), rnd:NextNumber(0.02, 0.5)), Size = UDim2.fromOffset(sz, sz), BackgroundColor3 = rgb(205, 218, 255), BackgroundTransparency = 0.4, BorderSizePixel = 0, Parent = gSky})
+            stars[i] = {f = f, sp = rnd:NextNumber(0.8, 2.6), ph = rnd:NextNumber(0, 6.28)}
+        end
+        local moon = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.8, 0.2), Size = UDim2.fromOffset(150, 150), BackgroundTransparency = 1, Parent = gSky})
+        for _, rg in ipairs({{150, 0.955}, {108, 0.93}, {74, 0.88}}) do
+            local c = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(rg[1], rg[1]), BackgroundColor3 = rgb(150, 185, 235), BackgroundTransparency = rg[2], BorderSizePixel = 0, Parent = moon})
+            Corner(c, 999)
+        end
+        local core = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(36, 36), BackgroundColor3 = rgb(238, 243, 255), BorderSizePixel = 0, Parent = moon})
+        Corner(core, 999)
+        for _, cr in ipairs({{9, 8, 9}, {21, 20, 6}, {14, 24, 4}}) do
+            local c = Bx(core, cr[1], cr[2], cr[3], cr[3], rgb(200, 210, 232), 0.35, 1, 999)
+        end
+        local clouds = {}
+        for _, cd in ipairs({{0.12, 0.12, 120, 14, 0.015}, {0.55, 0.27, 170, 18, 0.011}, {0.85, 0.37, 90, 10, 0.02}}) do
+            local f = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(cd[3], cd[4]), BackgroundColor3 = rgb(42, 56, 80), BackgroundTransparency = 0.72, BorderSizePixel = 0, Parent = gSky})
+            Corner(f, 999)
+            clouds[#clouds + 1] = {f = f, x = cd[1], y = cd[2], sp = cd[5]}
+        end
+        local function island(px, py, sw, sh, pts, col, w, h)
+            local holder = New("Frame", {AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(px, py), Size = UDim2.fromScale(sw, sh), BackgroundTransparency = 1, Parent = gSky})
+            local shp = Library.BuildPolyShape(holder, {pts = pts}, w, h, 0)
+            shp.SetFill(col)
+            shp.SetFillTransparency(0)
+        end
+        island(0.02, 0.655, 0.46, 0.11, {{0, 1}, {0, 0.7}, {0.1, 0.55}, {0.18, 0.62}, {0.3, 0.25}, {0.38, 0.4}, {0.47, 0.1}, {0.58, 0.45}, {0.66, 0.35}, {0.78, 0.6}, {0.9, 0.5}, {1, 0.75}, {1, 1}}, rgb(7, 11, 19), 253, 39)
+        island(0.64, 0.655, 0.3, 0.06, {{0, 1}, {0.05, 0.6}, {0.2, 0.45}, {0.35, 0.2}, {0.5, 0.45}, {0.7, 0.3}, {0.85, 0.65}, {1, 0.8}, {1, 1}}, rgb(10, 16, 28), 165, 21)
+
+        -- ---------- waves (3 layers) ----------
+        local defs = {
+            {g = G(2), base = 0.36, amp = 0.010, k = 2.4, w = 0.5, ph = 0.0, top = rgb(20, 42, 68), bot = rgb(3, 8, 16), tr = 0},
+            {g = G(4), base = 0.27, amp = 0.020, k = 2.0, w = -0.9, ph = 1.7, top = rgb(15, 46, 74), bot = rgb(3, 10, 20), tr = 0, foam = true},
+            {g = G(5), base = 0.15, amp = 0.032, k = 1.5, w = 1.2, ph = 3.1, top = rgb(22, 66, 98), bot = rgb(4, 16, 30), tr = 0.04, foam = true},
+        }
         for _, L in ipairs(defs) do
             L.cols, L.foams = {}, {}
             for i = 1, N do
-                local c = New("Frame", {AnchorPoint = Vector2.new(0, 1), Position = UDim2.new((i - 1) / N, 0, 1, 0), Size = UDim2.new(1 / N, 1, L.base, 0), BackgroundColor3 = WHITE, BackgroundTransparency = L.tr, BorderSizePixel = 0, ZIndex = 1, Parent = box})
+                local c = New("Frame", {AnchorPoint = Vector2.new(0, 1), Position = UDim2.new((i - 1) / N, 0, 1, 0), Size = UDim2.new(1 / N, 1, L.base, 0), BackgroundColor3 = WHITE, BackgroundTransparency = L.tr, BorderSizePixel = 0, Parent = L.g})
                 New("UIGradient", {Color = ColorSequence.new(L.top, L.bot), Rotation = 90, Parent = c})
                 if L.foam then
-                    L.foams[i] = New("Frame", {Size = UDim2.new(1, 0, 0, 4), BackgroundColor3 = WHITE, BackgroundTransparency = 0.4, BorderSizePixel = 0, ZIndex = 2, Parent = c})
+                    L.foams[i] = New("Frame", {Size = UDim2.new(1, 0, 0, 3), BackgroundColor3 = rgb(175, 205, 235), BackgroundTransparency = 0.6, BorderSizePixel = 0, Parent = c})
                 end
                 L.cols[i] = c
             end
         end
-        local glitter = {}
-        local rnd = Random.new(7)
-        for i = 1, 18 do
-            local g = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(rnd:NextNumber(0.03, 0.97), rnd:NextNumber(0.62, 0.97)), Size = UDim2.fromOffset(rnd:NextInteger(2, 4), rnd:NextInteger(1, 2)), BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 3, Parent = box})
-            glitter[i] = {f = g, sp = rnd:NextNumber(1.2, 3.2), ph = rnd:NextNumber(0, 6.28)}
+
+        -- ---------- pier + stairs + boat + people ----------
+        local gDock = G(3)
+        local dock = New("Frame", {AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 0.8, 0), Size = UDim2.fromOffset(372, 120), BackgroundTransparency = 1, Parent = gDock})
+        local wood, woodHi, woodDk = rgb(44, 31, 22), rgb(80, 58, 40), rgb(24, 16, 12)
+        Bx(dock, 0, 44, 198, 7, wood)
+        Bx(dock, 0, 44, 198, 1, woodHi)
+        for x = 14, 190, 16 do Bx(dock, x, 45, 1, 6, woodDk) end
+        Bx(dock, 0, 51, 198, 3, rgb(30, 21, 15))
+        for _, x in ipairs({10, 58, 106, 154, 192}) do
+            Bx(dock, x, 54, 5, 70, rgb(32, 23, 17))
+            Bx(dock, x, 54, 1, 70, rgb(52, 38, 28))
         end
+        for x = 0, 192, 48 do Bx(dock, x, 34, 2, 10, rgb(62, 46, 32)) end
+        Bx(dock, 0, 33, 198, 2, rgb(68, 50, 34))
+        local lamps = {}
+        for _, x in ipairs({30, 120, 186}) do
+            Bx(dock, x, 18, 3, 26, rgb(52, 38, 26))
+            local g2 = Bx(dock, x + 1.5 - 18, 16 - 18 + 4.5, 36, 36, rgb(255, 170, 80), 0.9, 1, 999)
+            local g1 = Bx(dock, x + 1.5 - 10, 16 - 10 + 4.5, 20, 20, rgb(255, 185, 95), 0.8, 1, 999)
+            Bx(dock, x - 3, 12, 9, 9, rgb(255, 205, 120), 0, 2, 3)
+            lamps[#lamps + 1] = {g1 = g1, g2 = g2, ph = rnd:NextNumber(0, 6.28)}
+        end
+        -- stairs (solid steps) going down to the boat deck + hand rail
+        for i = 0, 4 do
+            local sx, sy = 196 + i * 8, 44 + i * 8.5
+            Bx(dock, sx, sy, 8, 34 - i * 8.5 + 8, rgb(36, 26, 19), 0, 2)
+            Bx(dock, sx, sy, 8, 2, rgb(84, 61, 41), 0, 3)
+        end
+        local rail = Bx(dock, 216 - 26, 61 - 14 - 1, 52, 2, rgb(112, 86, 60), 0, 4)
+        rail.Rotation = 40.4
+        for i = 0, 4 do Bx(dock, 197 + i * 8, 44 + i * 8.5 - 15, 1.5, 14, rgb(90, 68, 46), 0, 3) end
+
+        -- boat (150 x 70, anchored bottom-center so it rocks around the waterline)
+        local boat = New("Frame", {AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.fromOffset(285, 112), Size = UDim2.fromOffset(150, 70), BackgroundTransparency = 1, ZIndex = 2, Parent = dock})
+        local hullH = New("Frame", {Position = UDim2.fromOffset(0, 36), Size = UDim2.fromOffset(150, 34), BackgroundTransparency = 1, ZIndex = 1, Parent = boat})
+        local hull = Library.BuildPolyShape(hullH, {pts = {{0.02, 0.05}, {0.9, 0}, {1, 0}, {0.9, 0.55}, {0.78, 1}, {0.16, 1}, {0.04, 0.55}}}, 150, 34, 0)
+        hull.SetFill(rgb(26, 30, 40))
+        hull.SetFillTransparency(0)
+        Bx(boat, 8, 47, 134, 2, rgb(150, 56, 40), 0.1, 2)
+        Bx(boat, 30, 16, 58, 22, rgb(44, 50, 64), 0, 2, 3)
+        Bx(boat, 26, 12, 66, 5, rgb(62, 68, 84), 0, 3, 2)
+        local wins = {}
+        for i = 0, 2 do wins[#wins + 1] = {f = Bx(boat, 36 + i * 17, 22, 10, 8, rgb(255, 205, 120), 0, 3, 1), ph = rnd:NextNumber(0, 6.28)} end
+        Bx(boat, 112, 4, 3, 34, rgb(64, 50, 36), 0, 2)
+        local mastGlow = Bx(boat, 107, -3, 14, 14, rgb(255, 190, 100), 0.82, 2, 999)
+        Bx(boat, 111, 1, 6, 6, rgb(255, 205, 120), 0, 3, 999)
+        local flag = New("Frame", {AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromOffset(115, 12), Size = UDim2.fromOffset(15, 7), BackgroundColor3 = rgb(170, 48, 48), BorderSizePixel = 0, ZIndex = 3, Parent = boat})
+
+        local people = {}
+        for i = 1, 4 do
+            local pf = New("Frame", {AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(5, 15), BackgroundTransparency = 1, ZIndex = 6, Visible = false, Parent = dock})
+            Bx(pf, 0.5, 6, 4, 9, rgb(9, 11, 16), 0, 1, 2)
+            Bx(pf, 0.5, 0, 4, 5, rgb(30, 32, 42), 0, 1, 999)
+            people[i] = {f = pf, off = (i - 1) * 0.27, ph = rnd:NextNumber(0, 6.28)}
+        end
+
+        -- ---------- moon reflection, fog, vignette, dim ----------
+        local gRef = G(6)
+        local refl = {}
+        for i = 1, 14 do
+            local f = Bx(gRef, 0, 0, 6 + i * 3.4, 2, rgb(190, 215, 245), 0.6, 1, 1)
+            f.AnchorPoint = Vector2.new(0.5, 0.5)
+            refl[i] = {f = f, i = i, ph = rnd:NextNumber(0, 6.28), sp = rnd:NextNumber(1.2, 2.6)}
+        end
+        local gFog = G(7)
+        local fogs = {}
+        for _, fg in ipairs({{0.62, 0.1, 0.02}, {0.72, 0.08, -0.014}}) do
+            local f = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromScale(1.4, fg[2]), BackgroundColor3 = rgb(90, 120, 160), BorderSizePixel = 0, Parent = gFog})
+            New("UIGradient", {Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.5, 0.9), NumberSequenceKeypoint.new(1, 1)}), Rotation = 90, Parent = f})
+            fogs[#fogs + 1] = {f = f, y = fg[1], sp = fg[3]}
+        end
+        local gVig = G(8)
+        local function vig(pos, size, rot, tr0, tr1)
+            local f = New("Frame", {Position = pos, Size = size, BackgroundColor3 = rgb(0, 0, 0), BorderSizePixel = 0, Parent = gVig})
+            New("UIGradient", {Transparency = NumberSequence.new(tr0, tr1), Rotation = rot, Parent = f})
+        end
+        vig(UDim2.fromScale(0, 0), UDim2.fromScale(1, 0.24), 90, 0.15, 1)
+        vig(UDim2.fromScale(0, 0.7), UDim2.fromScale(1, 0.3), 90, 1, 0.2)
+        vig(UDim2.fromScale(0, 0), UDim2.fromScale(0.12, 1), 0, 0.35, 1)
+        vig(UDim2.fromScale(0.88, 0), UDim2.fromScale(0.12, 1), 0, 1, 0.35)
+        local dim = New("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = rgb(0, 0, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 9, Parent = box})
+        function Window:SetSceneDim(v) Tween(dim, 0.45, {BackgroundTransparency = 1 - math.clamp(v, 0, 1)}) end
+        Window.OnTabChanged = function(tab)
+            Window:SetSceneDim((Window.HomeTab and tab == Window.HomeTab) and 0 or 0.42)
+        end
+
+        -- ---------- animation ----------
         local acc = 0
         WConn(RS.RenderStepped, function(dt)
             if not Sea.On or not Window.Visible or Window.Collapsed then return end
             acc = acc + dt
-            if acc < 1 / 30 then return end
+            if acc < (Window.Perf and 1 / 18 or 1 / 30) then return end
             acc = 0
             local t = os.clock()
             for _, L in ipairs(defs) do
-                local tide = 0.012 * math.sin(t * 0.5 + L.ph)
+                local tide = 0.008 * math.sin(t * 0.5 + L.ph)
                 for i, c in ipairs(L.cols) do
                     local u = (i - 1) / N * math.pi * 2 * L.k
                     local wave = math.sin(u + t * L.w + L.ph) + 0.5 * math.sin(u * 1.9 - t * L.w * 0.7) + 0.25 * math.sin(u * 3.7 + t * L.w * 1.6)
                     c.Size = UDim2.new(1 / N, 1, math.clamp(L.base + tide + L.amp * wave * 0.65, 0.05, 0.95), 0)
                     local fm = L.foams[i]
-                    if fm then fm.BackgroundTransparency = 0.88 - 0.62 * math.max(0, math.sin(u + t * L.w + L.ph + 1.2)) end
+                    if fm then fm.BackgroundTransparency = 0.92 - 0.55 * math.max(0, math.sin(u + t * L.w + L.ph + 1.2)) end
                 end
             end
-            for _, g in ipairs(glitter) do
-                g.f.BackgroundTransparency = 1 - 0.75 * math.max(0, math.sin(t * g.sp + g.ph))
+            -- boat rocking
+            local bobY = math.sin(t * 1.1) * 2.2
+            boat.Position = UDim2.fromOffset(285, 112 + bobY)
+            boat.Rotation = math.sin(t * 0.85) * 1.8
+            flag.Rotation = math.sin(t * 5) * 12
+            -- people: pier -> stairs -> boat
+            for _, p in ipairs(people) do
+                local u = ((t / 18) + p.off) % 1
+                local x, y, vis
+                local hop = math.abs(math.sin(t * 8 + p.ph))
+                if u < 0.56 then
+                    x, y, vis = -10 + (u / 0.56) * 208, 44 - hop * 1.6, true
+                elseif u < 0.78 then
+                    local q = (u - 0.56) / 0.22
+                    x, y, vis = 196 + q * 40, 44 + math.min(4, math.floor(q * 5)) * 8.5 - hop * 1.2, true
+                elseif u < 0.9 then
+                    local q = (u - 0.78) / 0.12
+                    x, y, vis = 236 + q * 22, 78 + bobY - hop * 1.2, true
+                else
+                    vis = false
+                end
+                p.f.Visible = vis
+                if vis then p.f.Position = UDim2.fromOffset(x, y) end
+            end
+            for _, l in ipairs(lamps) do
+                local fl = 0.5 + 0.5 * math.sin(t * 11 + l.ph) * math.sin(t * 3.1 + l.ph)
+                l.g1.BackgroundTransparency = 0.74 + 0.1 * fl
+                l.g2.BackgroundTransparency = 0.87 + 0.06 * fl
+            end
+            for _, w in ipairs(wins) do w.f.BackgroundTransparency = 0.05 + 0.18 * (0.5 + 0.5 * math.sin(t * 4 + w.ph)) end
+            mastGlow.BackgroundTransparency = 0.8 + 0.08 * math.sin(t * 6)
+            for _, r in ipairs(refl) do
+                r.f.BackgroundTransparency = 0.45 + 0.45 * (0.5 + 0.5 * math.sin(t * r.sp + r.ph))
+                r.f.Position = UDim2.new(0.8, math.sin(t * 0.9 + r.ph) * (1 + r.i * 0.6), 0.66 + r.i * 0.019, 0)
+            end
+            for _, c in ipairs(clouds) do
+                c.f.Position = UDim2.new(((c.x + t * c.sp) % 1.5) - 0.25, 0, c.y, 0)
+            end
+            for _, fg in ipairs(fogs) do
+                fg.f.Position = UDim2.new(0.5 + math.sin(t * 0.07 + fg.y * 9) * 0.06 + fg.sp * math.sin(t * 0.3), 0, fg.y, 0)
+            end
+            if not Window.Perf then
+                for _, st in ipairs(stars) do
+                    st.f.BackgroundTransparency = 0.25 + 0.6 * (0.5 + 0.5 * math.sin(t * st.sp + st.ph))
+                end
             end
         end)
     end
@@ -1511,7 +1741,7 @@ function Library:CreateWindow(cfg)
     function Window:SetCollapsed(v)
         if v == Window.Collapsed then return end
         Window.Collapsed = v
-        local curH = Holder.AbsoluteSize.Y
+        local curH = Holder.AbsoluteSize.Y / math.max(DevScale.Scale, 0.01)
         if v then fullH = curH end
         local targetH = v and 52 or (fullH or curH)
         local p = Holder.Position
@@ -1525,7 +1755,7 @@ function Library:CreateWindow(cfg)
         Tween(wIcon, 0.3, {ImageTransparency = v and 1 or 0})
         Tween(colB, 0.45, {Rotation = v and 180 or 0}, Enum.EasingStyle.Back)
         if v then
-            Tween(titleRow, 0.55, {Position = UDim2.new(0.5, -titleRow.AbsoluteSize.X / 2, 0, 12)}, Enum.EasingStyle.Back)
+            Tween(titleRow, 0.55, {Position = UDim2.new(0.5, -titleRow.AbsoluteSize.X / EffScale(titleRow) / 2, 0, 12)}, Enum.EasingStyle.Back)
             task.delay(0.3, function() if Window.Collapsed then Body.Visible = false end end)
         else
             Body.Visible = true
@@ -1572,7 +1802,7 @@ function Library:CreateWindow(cfg)
     function Window:SetTitle(s) title.Text = s end
     function Window:SetDescription(s) desc.Text = s end
     function Window:SetIcon(n) wIcon.Visible = ApplyIcon(wIcon, n) end
-    function Window:SetSize(s) size = s Tween(Holder, 0.5, {Size = s}, Enum.EasingStyle.Back) end
+    function Window:SetSize(s) size = s Tween(Holder, 0.5, {Size = s}, Enum.EasingStyle.Back) if Window.ApplyDevice then Window:ApplyDevice() end end
     function Window:Notify(c) Library:Notify(c) end
     function Window:SetClickSound(n)
         if n == nil or n == "" or n == "None" then Library.ClickSound = "None" return end
@@ -1631,6 +1861,7 @@ function Library:CreateWindow(cfg)
                 if m < 8 then Library:PlaySound(Library.ClickSound) Window:SetVisible(not Window.Visible) end
             end})
             Window.OpenButton = OB
+            Window.OBBase = OB.Size
         end
     end
 
@@ -1726,7 +1957,7 @@ function Library:CreateWindow(cfg)
         if not info then return end
         local cols = {}
         for _, hx in ipairs(d.Colors or {}) do table.insert(cols, Color3.fromHex(hx)) end
-        Window:SpawnFloat(info, {Name = d.Name, W = d.W, H = d.H, Shape = d.Shape, Transparency = d.Transparency, Color = Color3.fromHex(d.Color), Colors = cols, Thickness = d.Thickness, Speed = d.Speed, Strength = d.Strength}, d.Pos)
+        Window:SpawnFloat(info, {Name = d.Name, W = d.W, H = d.H, Shape = d.Shape, Icon = d.Icon, Transparency = d.Transparency, Color = Color3.fromHex(d.Color), Colors = cols, Thickness = d.Thickness, Speed = d.Speed, Strength = d.Strength}, d.Pos)
     end
     -- every floating button (its look, position, on/off) is brought back as soon as its toggle exists
     function Window.OnFloatInfo(info)
@@ -2102,18 +2333,22 @@ function Library:CreateWindow(cfg)
         return math.clamp(tonumber(a), 30, 300), math.clamp(tonumber(b), 30, 300)
     end
 
-    -- builds a floating button. o = {Name, W, H, Shape, Transparency, Color, Colors, Thickness, Speed, Strength}
+    -- builds a floating button. o = {Name, W, H, Shape, Icon, Transparency, Color, Colors, Thickness, Speed, Strength}
+    -- size <= 36: always a small circle with a tiny name.  Icon = icon name / image id / rbxassetid / url / workspace file
     local function BuildFloat(parent, o, toggle)
         o.Thickness = o.Thickness or 2.5
         o.Speed = o.Speed or 60
         o.Strength = o.Strength or 1
         o.Shape = Library.FloatShapes[o.Shape] and o.Shape or "Rounded"
+        local real = (parent == Gui)
         local holder = New("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(o.W, o.H), BackgroundTransparency = 1, Parent = parent})
         local b = New("TextButton", {Name = "VOX_Float", Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Dark, BackgroundTransparency = o.Transparency, Text = "", AutoButtonColor = false, ZIndex = 5, NoSound = true, Parent = holder})
         local corner = Corner(b, 14)
         local st = Stroke(b, WHITE, o.Thickness, 0)
         local grad = New("UIGradient", {Parent = st})
-        local nameL = New("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromScale(0, toggle and -0.08 or 0), Size = UDim2.fromScale(1, 1), Font = Font.GothamBold, Text = o.Name, TextSize = 12, TextColor3 = WHITE, TextWrapped = true, Parent = b})
+        local iconL = New("ImageLabel", {AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, ImageColor3 = WHITE, Visible = false, Parent = b})
+        local nameL = New("TextLabel", {BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Font = Font.GothamBold, Text = o.Name, TextScaled = true, TextSize = 12, TextColor3 = WHITE, TextWrapped = true, Parent = b})
+        local tsc = New("UITextSizeConstraint", {MaxTextSize = 12, MinTextSize = 5, Parent = nameL})
         local stateL
         if toggle then
             stateL = New("TextLabel", {AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -4), Size = UDim2.new(1, 0, 0, 12), BackgroundTransparency = 1, Font = Font.GothamBlack, Text = "OFF", TextSize = 10, TextColor3 = Color3.fromRGB(190, 195, 192), Parent = b})
@@ -2121,6 +2356,7 @@ function Library:CreateWindow(cfg)
         local shp, shpSig
         local fillCol = T.Dark
         local rot = 0
+        local lastIcon, hasIcon = nil, false
         local function colsList()
             local cols = o.Colors
             if cols and #cols >= 2 then return cols end
@@ -2132,8 +2368,10 @@ function Library:CreateWindow(cfg)
             if shp then shp.SetFill(col) else Tween(b, 0.3, {BackgroundColor3 = col}) end
         end
         local function apply()
-            holder.Size = UDim2.fromOffset(o.W, o.H)
-            nameL.Text = o.Name
+            local dev = real and (Window.FloatDev or 1) or 1
+            local W, H = o.W * dev, o.H * dev
+            local m = math.min(W, H)
+            holder.Size = UDim2.fromOffset(W, H)
             st.Thickness = o.Thickness
             st.Transparency = 1 - math.clamp(o.Strength, 0.05, 1)
             local cols = o.Colors
@@ -2147,7 +2385,41 @@ function Library:CreateWindow(cfg)
             else
                 grad.Color = ColorSequence.new(o.Color)
             end
-            local def = Library.FloatShapes[o.Shape] or Library.FloatShapes.Rounded
+            -- tiny button -> always a small circle
+            local small = math.max(o.W, o.H) <= 36
+            local def = small and Library.FloatShapes.Circle or (Library.FloatShapes[o.Shape] or Library.FloatShapes.Rounded)
+            -- icon
+            if o.Icon ~= lastIcon then
+                lastIcon = o.Icon
+                iconL.Image = ""
+                iconL.ImageRectSize = Vector2.zero
+                iconL.ImageRectOffset = Vector2.zero
+                hasIcon = (o.Icon ~= nil and o.Icon ~= "") and ApplyIcon(iconL, o.Icon) or false
+            end
+            -- text / icon layout: always inside the shape, never cramped
+            local showState = toggle and m >= 50
+            local showName = (not hasIcon) or m >= 60
+            local round = (def.corner and def.corner.Scale > 0.25) or (not def.corner)
+            local inset = round and 0.16 or 0.04
+            nameL.Text = o.Name
+            nameL.Visible = showName
+            tsc.MaxTextSize = math.clamp(math.floor(m / 4.6), 7, 14)
+            if hasIcon then
+                local isz = math.clamp(m * (showName and 0.42 or 0.58), 8, 140)
+                iconL.Visible = true
+                iconL.Size = UDim2.fromOffset(isz, isz)
+                iconL.Position = UDim2.new(0.5, 0, showName and 0.36 or (showState and 0.42 or 0.5), 0)
+                nameL.Position = UDim2.new(inset, 0, 0.62, 0)
+                nameL.Size = UDim2.new(1 - 2 * inset, 0, 0.22, 0)
+            else
+                iconL.Visible = false
+                nameL.Position = UDim2.new(inset, 0, 0, showState and -m * 0.06 or 0)
+                nameL.Size = UDim2.new(1 - 2 * inset, 0, 1, 0)
+            end
+            if stateL then
+                stateL.Visible = showState
+                stateL.TextSize = math.clamp(math.floor(m / 6), 7, 10)
+            end
             if def.corner then
                 if shp then shp.Destroy() shp, shpSig = nil, nil end
                 corner.CornerRadius = def.corner
@@ -2179,14 +2451,14 @@ function Library:CreateWindow(cfg)
             grad.Rotation = rot
             if shp and o.Speed > 0 then
                 acc = acc + dt
-                if acc >= 0.05 then acc = 0 shp.Paint(colsList(), rot) end
+                if acc >= (Window.Perf and 0.1 or 0.05) then acc = 0 shp.Paint(colsList(), rot) end
             end
         end)
         return holder, b, st, stateL, apply, setFill
     end
 
     local function OpenFloatPanel(info)
-        local panel, close = OpenPopup(470, 296)
+        local panel, close = OpenPopup(470, 330)
         local opts = {Name = info.Name, W = 56, H = 56, Shape = "Rounded", Transparency = 0.1, Color = T.Accent, Thickness = 2.5, Speed = 60, Strength = 1, Colors = {}}
         local function syncColors()
             local list = {opts.Color}
@@ -2198,14 +2470,14 @@ function Library:CreateWindow(cfg)
         PLabel(panel, info.Toggle and "Floating Toggle" or "Floating Button", 14, 10, 300, 20, Left, 14, T.Text, Font.GothamBlack)
 
         -- preview square (shows the real button; every change updates it live)
-        local area = New("Frame", {Position = UDim2.fromOffset(14, 40), Size = UDim2.fromOffset(172, 190), BackgroundColor3 = T.Elem, BorderSizePixel = 0, ClipsDescendants = true, Parent = panel})
+        local area = New("Frame", {Position = UDim2.fromOffset(14, 40), Size = UDim2.fromOffset(172, 224), BackgroundColor3 = T.Elem, BorderSizePixel = 0, ClipsDescendants = true, Parent = panel})
         Corner(area, 12)
         Stroke(area, T.Accent, 2, 0.1)
         PLabel(area, "PREVIEW", 0, 8, 172, 14, Center, 10, T.Sub, Font.GothamBlack)
         local pvHolder, pvBtn, pvSt, pvState, pvApply = BuildFloat(area, opts, info.Toggle)
         pvHolder.Position = UDim2.new(0.5, 0, 0.5, 4)
         local pvScale = New("UIScale", {Parent = pvHolder})
-        local cap = PLabel(area, "56 x 56", 0, 168, 172, 16, Center, 12, T.Accent, Font.GothamBold)
+        local cap = PLabel(area, "56 x 56", 0, 202, 172, 16, Center, 12, T.Accent, Font.GothamBold)
         local function refresh()
             syncColors()
             pvApply()
@@ -2214,7 +2486,7 @@ function Library:CreateWindow(cfg)
         end
         refresh()
 
-        local pageSize = UDim2.fromOffset(256, 196)
+        local pageSize = UDim2.fromOffset(256, 230)
         local colMain = New("CanvasGroup", {Position = UDim2.fromOffset(200, 40), Size = pageSize, BackgroundTransparency = 1, Parent = panel})
         local colBorder = New("CanvasGroup", {Position = UDim2.fromOffset(240, 40), Size = pageSize, BackgroundTransparency = 1, GroupTransparency = 1, Visible = false, Parent = panel})
 
@@ -2278,7 +2550,7 @@ function Library:CreateWindow(cfg)
             refresh()
         end
         local function buildShapeList()
-            shList = New("ScrollingFrame", {Position = UDim2.fromOffset(262, 146), Size = UDim2.fromOffset(194, 98), BackgroundColor3 = T.Dark, BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.Accent, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 30, Visible = false, Parent = panel})
+            shList = New("ScrollingFrame", {Position = UDim2.fromOffset(262, 146), Size = UDim2.fromOffset(194, 120), BackgroundColor3 = T.Dark, BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.Accent, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 30, Visible = false, Parent = panel})
             Corner(shList, 8)
             Stroke(shList, T.Accent, 1.5, 0.1)
             New("UIListLayout", {Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder, Parent = shList})
@@ -2297,12 +2569,31 @@ function Library:CreateWindow(cfg)
             shArrow.Text = shList.Visible and "^" or "v"
         end)
 
-        PLabel(colMain, "Transparency", 0, 114, 120, 18, Left, 12, T.Sub)
-        local sl2 = PLabel(colMain, "0.1", 196, 114, 60, 18, Right, 12, T.Accent)
-        local h2 = New("Frame", {Position = UDim2.fromOffset(0, 134), Size = UDim2.fromOffset(256, 18), BackgroundTransparency = 1, Parent = colMain})
+        -- ===== icon: name (lucide), image id, rbxassetid://, url or a file in workspace =====
+        PLabel(colMain, "Icon", 0, 112, 60, 28, Left, 12, T.Sub)
+        local ib = New("TextBox", {Position = UDim2.fromOffset(62, 112), Size = UDim2.fromOffset(194, 28), BackgroundColor3 = T.Elem, Text = "", PlaceholderText = "icon name / image ID", TextColor3 = T.Text, PlaceholderColor3 = T.Sub, Font = Font.GothamMedium, TextSize = 12, ClearTextOnFocus = false, Parent = colMain})
+        Corner(ib, 6)
+        local ist = Stroke(ib, T.Accent, 1.5, 0.2)
+        ib.Focused:Connect(function() Tween(ist, 0.2, {Transparency = 0}) end)
+        ib.FocusLost:Connect(function() Tween(ist, 0.2, {Transparency = 0.2}) end)
+        local itoken = 0
+        ib:GetPropertyChangedSignal("Text"):Connect(function()
+            itoken = itoken + 1
+            local my = itoken
+            task.delay(0.35, function()
+                if my ~= itoken then return end
+                local txt = ib.Text:match("^%s*(.-)%s*$")
+                opts.Icon = txt ~= "" and txt or nil
+                refresh()
+            end)
+        end)
+
+        PLabel(colMain, "Transparency", 0, 148, 120, 18, Left, 12, T.Sub)
+        local sl2 = PLabel(colMain, "0.1", 196, 148, 60, 18, Right, 12, T.Accent)
+        local h2 = New("Frame", {Position = UDim2.fromOffset(0, 168), Size = UDim2.fromOffset(256, 18), BackgroundTransparency = 1, Parent = colMain})
         MakeSlider(h2, 0, 0.9, 0.1, 0.05, function(v) opts.Transparency = v refresh() end, sl2)
 
-        local goBorder = New("TextButton", {Position = UDim2.fromOffset(0, 160), Size = UDim2.fromOffset(256, 32), BackgroundColor3 = T.Accent, Text = "Border & Gradient   >", Font = Font.GothamBlack, TextSize = 13, TextColor3 = (0.299 * T.Accent.R + 0.587 * T.Accent.G + 0.114 * T.Accent.B) > 0.6 and BLACK or WHITE, AutoButtonColor = false, Parent = colMain})
+        local goBorder = New("TextButton", {Position = UDim2.fromOffset(0, 194), Size = UDim2.fromOffset(256, 32), BackgroundColor3 = T.Accent, Text = "Border & Gradient   >", Font = Font.GothamBlack, TextSize = 13, TextColor3 = (0.299 * T.Accent.R + 0.587 * T.Accent.G + 0.114 * T.Accent.B) > 0.6 and BLACK or WHITE, AutoButtonColor = false, Parent = colMain})
         Corner(goBorder, 8)
         Stroke(goBorder, WHITE, 1.5, 0.5)
 
@@ -2386,7 +2677,7 @@ function Library:CreateWindow(cfg)
         back.MouseButton1Click:Connect(function() showBorder(false) end)
 
         local function pbtn(text, x, w, filled, fn)
-            local b = New("TextButton", {Position = UDim2.fromOffset(x, 246), Size = UDim2.fromOffset(w, 36), BackgroundColor3 = T.Accent, BackgroundTransparency = filled and 0 or 0.55, Text = text, Font = Font.GothamBlack, TextSize = 12, TextColor3 = filled and BLACK or T.Text, TextWrapped = true, AutoButtonColor = false, Parent = panel})
+            local b = New("TextButton", {Position = UDim2.fromOffset(x, 282), Size = UDim2.fromOffset(w, 36), BackgroundColor3 = T.Accent, BackgroundTransparency = filled and 0 or 0.55, Text = text, Font = Font.GothamBlack, TextSize = 12, TextColor3 = filled and BLACK or T.Text, TextWrapped = true, AutoButtonColor = false, Parent = panel})
             Corner(b, 8)
             Stroke(b, T.Accent, 1.5, 0.1)
             local bs = New("UIScale", {Parent = b})
@@ -2400,19 +2691,66 @@ function Library:CreateWindow(cfg)
             if w then opts.W, opts.H = w, h end
             syncColors()
             close()
-            Window:SpawnFloat(info, {Name = opts.Name, W = opts.W, H = opts.H, Shape = opts.Shape, Transparency = opts.Transparency, Color = opts.Color, Colors = opts.Colors, Thickness = opts.Thickness, Speed = opts.Speed, Strength = opts.Strength})
+            Window:SpawnFloat(info, {Name = opts.Name, W = opts.W, H = opts.H, Shape = opts.Shape, Icon = opts.Icon, Transparency = opts.Transparency, Color = opts.Color, Colors = opts.Colors, Thickness = opts.Thickness, Speed = opts.Speed, Strength = opts.Strength})
             Window:SetVisible(false)
         end)
+    end
+
+    -- first free spot, starting top-left; every new button goes right next to the previous one (8px gap)
+    -- and wraps to a new row when the line is full
+    function Window.NextFloatSlot(w, h)
+        local gap, mx, my = 8, 8, 8
+        local vp = Gui.AbsoluteSize
+        local origin = Vector2.zero
+        pcall(function() origin = Gui.AbsolutePosition end)
+        local rects = {}
+        for _, fl in pairs(Window.Floats) do
+            local hd = fl.Holder
+            if hd and hd.Parent then
+                local fw, fh = fl.Size()
+                local c = hd.AbsolutePosition - origin + hd.AbsoluteSize / 2
+                table.insert(rects, {c.X - fw / 2, c.Y - fh / 2, c.X + fw / 2, c.Y + fh / 2})
+            end
+        end
+        local xs, ys = {mx}, {my}
+        for _, r in ipairs(rects) do
+            table.insert(xs, r[3] + gap)
+            table.insert(ys, r[4] + gap)
+        end
+        table.sort(xs)
+        table.sort(ys)
+        for _, y in ipairs(ys) do
+            for _, x in ipairs(xs) do
+                if x + w <= vp.X - mx and y + h <= vp.Y - my then
+                    local free = true
+                    for _, r in ipairs(rects) do
+                        if x < r[3] + gap - 0.5 and x + w > r[1] - gap + 0.5 and y < r[4] + gap - 0.5 and y + h > r[2] - gap + 0.5 then
+                            free = false
+                            break
+                        end
+                    end
+                    if free then return x + w / 2, y + h / 2 end
+                end
+            end
+        end
+        return vp.X / 2, vp.Y * 0.3
     end
 
     -- pos (optional) = saved {xScale, xOffset, yScale, yOffset}
     function Window:SpawnFloat(info, o, pos)
         if Window.Floats[info] then Window.Floats[info]:Destroy() end
-        o = {Name = o.Name or info.Name, W = o.W or o.Size or 56, H = o.H or o.Size or 56, Shape = o.Shape or "Rounded", Transparency = o.Transparency or 0.1, Color = o.Color or T.Accent, Colors = o.Colors, Thickness = o.Thickness or 2.5, Speed = o.Speed or 60, Strength = o.Strength or 1}
-        local holder, b, st, stateL, _, setFill = BuildFloat(Gui, o, info.Toggle)
-        holder.Position = UDim2.new(0.5, 0, 0.3, 0)
-        if pos then posApply(holder, pos) end
-        local norm = UDim2.fromOffset(o.W, o.H)
+        o = {Name = o.Name or info.Name, W = o.W or o.Size or 56, H = o.H or o.Size or 56, Shape = o.Shape or "Rounded", Icon = o.Icon, Transparency = o.Transparency or 0.1, Color = o.Color or T.Accent, Colors = o.Colors, Thickness = o.Thickness or 2.5, Speed = o.Speed or 60, Strength = o.Strength or 1}
+        local holder, b, st, stateL, fapply, setFill = BuildFloat(Gui, o, info.Toggle)
+        local function getNorm() local d = Window.FloatDev or 1 return UDim2.fromOffset(o.W * d, o.H * d) end
+        if pos then
+            holder.Position = UDim2.new(0.5, 0, 0.3, 0)
+            posApply(holder, pos)
+        else
+            local d = Window.FloatDev or 1
+            local sx, sy = Window.NextFloatSlot(o.W * d, o.H * d)
+            holder.Position = UDim2.fromOffset(sx, sy)
+        end
+        local norm = getNorm()
         local th = o.Thickness
         local sc = New("UIScale", {Scale = 0, Parent = holder})
         Tween(sc, 0.6, {Scale = 1}, Enum.EasingStyle.Elastic)
@@ -2422,8 +2760,9 @@ function Library:CreateWindow(cfg)
             if pulsing then return end
             pulsing = true
             task.spawn(function()
-                local big = UDim2.fromOffset(o.W * 1.16, o.H * 1.16)
-                local mid = UDim2.fromOffset(o.W * 1.08, o.H * 1.08)
+                local fd = Window.FloatDev or 1
+                local big = UDim2.fromOffset(o.W * 1.16 * fd, o.H * 1.16 * fd)
+                local mid = UDim2.fromOffset(o.W * 1.08 * fd, o.H * 1.08 * fd)
                 local sine = Enum.EasingStyle.Sine
                 while alive and on do
                     Tween(holder, 0.12, {Size = big}, sine) Tween(st, 0.12, {Thickness = th * 2}, sine) task.wait(0.13)
@@ -2449,7 +2788,9 @@ function Library:CreateWindow(cfg)
         end
 
         local dragObj
-        local obj = {}
+        local obj = {Holder = holder}
+        function obj.Size() local d = Window.FloatDev or 1 return o.W * d, o.H * d end
+        function obj:Rescale() norm = getNorm() fapply() end
         function obj:Destroy()
             alive = false
             Window.Floats[info] = nil
@@ -2462,7 +2803,7 @@ function Library:CreateWindow(cfg)
             local cols = {}
             for _, c3 in ipairs(o.Colors or {}) do table.insert(cols, c3:ToHex()) end
             return {
-                Key = info.Key or info.Name, Name = o.Name, W = o.W, H = o.H, Shape = o.Shape, Transparency = o.Transparency,
+                Key = info.Key or info.Name, Name = o.Name, W = o.W, H = o.H, Shape = o.Shape, Icon = o.Icon, Transparency = o.Transparency,
                 Color = o.Color:ToHex(), Colors = cols, Thickness = o.Thickness, Speed = o.Speed, Strength = o.Strength,
                 Pos = posData(holder),
             }
@@ -3306,7 +3647,10 @@ function Library:CreateWindow(cfg)
                 if v and not Window.Loading then Window:SetColor(v) end
             end})
             Tab:Slider({Name = "UI Transparency", Min = 0, Max = 0.9, Default = curTrans, Increment = 0.05, Flag = "UI_Transparency", Callback = function(v) Window:SetTransparency(v) end})
-            Tab:Toggle({Name = "Sea Waves", Desc = "Real animated sea inside the frame", Default = Window and Sea.On, MiniButton = false, Flag = "UI_Sea", Callback = function(v) Window:SetSea(v) end})
+            Tab:Toggle({Name = "Auto Device Scale", Desc = "Phone = smaller floating buttons (the window keeps its size)", Default = Window.AutoScale, MiniButton = false, Flag = "UI_AutoScale", Callback = function(v) Window.AutoScale = v and true or false Window:ApplyDevice() end})
+            Tab:Slider({Name = "UI Scale", Min = 0.6, Max = 1.4, Default = Window.ScaleMul or 1, Increment = 0.05, Flag = "UI_ScaleMul", Callback = function(v) Window.ScaleMul = v Window:ApplyDevice() end})
+            Tab:Toggle({Name = "Performance Mode", Desc = "Lighter animations for more FPS (turns on by itself on phones)", Default = Window.Perf, MiniButton = false, Flag = "UI_Perf", Callback = function(v) Window.PerfManual = v and true or false Window.Perf = Window.PerfManual end})
+            Tab:Toggle({Name = "Cinematic Harbor", Desc = "Night harbor scene inside the frame (pier, stairs, boat)", Default = Window and Sea.On, MiniButton = false, Flag = "UI_Sea", Callback = function(v) Window:SetSea(v) end})
             Tab:Section("Sound")
             Tab:Toggle({Name = "UI Sounds", Default = Library.SoundEnabled, MiniButton = false, Flag = "UI_Sound", Callback = function(v) Library.SoundEnabled = v end})
             Tab:Dropdown({Name = "Click Sound", Options = Library.SoundNames, Default = Library.ClickSound, Search = true, Silent = true, Flag = "UI_ClickSound", Callback = function(v)
@@ -3464,13 +3808,14 @@ function Library:CreateWindow(cfg)
 
     -- Tabs
     local function moveSelector(tab, instant)
-        local y = tab.Btn.AbsolutePosition.Y - side.AbsolutePosition.Y
-        local h = tab.Btn.AbsoluteSize.Y
+        local es = EffScale(side)
+        local y = (tab.Btn.AbsolutePosition.Y - side.AbsolutePosition.Y) / es - 3
+        local h = tab.Btn.AbsoluteSize.Y / es + 6
         if instant then
-            selector.Position = UDim2.fromOffset(6, y)
-            selector.Size = UDim2.new(1, -12, 0, h)
+            selector.Position = UDim2.fromOffset(4, y)
+            selector.Size = UDim2.new(1, -8, 0, h)
         else
-            Tween(selector, 0.5, {Position = UDim2.fromOffset(6, y), Size = UDim2.new(1, -12, 0, h)}, Enum.EasingStyle.Back)
+            Tween(selector, 0.5, {Position = UDim2.fromOffset(4, y), Size = UDim2.new(1, -8, 0, h)}, Enum.EasingStyle.Back)
         end
     end
     sideScroll:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
@@ -3478,6 +3823,7 @@ function Library:CreateWindow(cfg)
     end)
 
     local function Select(tab)
+        if Window.OnTabChanged then pcall(Window.OnTabChanged, tab) end
         if Window.CloseSub then
             local fn = Window.CloseSub
             Window.CloseSub = nil
@@ -3594,6 +3940,212 @@ function Library:CreateWindow(cfg)
         if #Window.Tabs == 1 then task.delay(0.1, function() Select(Tab) end) end
         return Tab
     end
+
+    -- ======================================================
+    -- HOME: the page you land on (no tab is opened by itself).
+    -- Player card with a live preview of your skin, your PING, FPS and server info.
+    -- cfg.Home = false removes it.
+    -- ======================================================
+    if cfg.Home ~= false then
+        local HT = Window:Tab({Name = cfg.HomeName or "Home", Icon = "home"})
+        Window.HomeTab = HT
+        HT.Scroll.Visible = false
+        local page = HT.Page
+        local startClock = os.clock()
+
+        local function Glass(parent, props)
+            local f = New("Frame", {BackgroundColor3 = Color3.fromRGB(6, 6, 9), BackgroundTransparency = 0.25, BorderSizePixel = 0, ZIndex = 4, Parent = parent})
+            for k, v in pairs(props) do f[k] = v end
+            Corner(f, 12)
+            local st = Stroke(f, T.Accent, 1, 0.62)
+            Reg(function() st.Color = T.Accent end)
+            return f
+        end
+        local function Lbl(parent, props)
+            local l = New("TextLabel", {BackgroundTransparency = 1, Font = Font.GothamMedium, TextSize = 12, TextColor3 = T.Sub, TextXAlignment = Left, ZIndex = 5, Parent = parent})
+            for k, v in pairs(props) do l[k] = v end
+            return l
+        end
+
+        -- ===== player card =====
+        local hero = Glass(page, {Position = UDim2.new(0, 2, 0, 2), Size = UDim2.new(0.41, -4, 1, -6)})
+        local stage = New("Frame", {Position = UDim2.fromOffset(6, 6), Size = UDim2.new(1, -12, 1, -64), BackgroundColor3 = Color3.fromRGB(2, 2, 4), BackgroundTransparency = 0.1, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 5, Parent = hero})
+        Corner(stage, 10)
+        New("UIGradient", {Color = ColorSequence.new(Color3.fromRGB(30, 34, 44), Color3.fromRGB(2, 2, 4)), Rotation = 90, Parent = stage})
+        local vp = New("ViewportFrame", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Ambient = Color3.fromRGB(165, 170, 188), LightColor = WHITE, LightDirection = Vector3.new(-0.4, -0.6, -0.7), ZIndex = 6, Parent = stage})
+        local cam = Instance.new("Camera")
+        cam.FieldOfView = 38
+        cam.Parent = vp
+        vp.CurrentCamera = cam
+        Lbl(hero, {Position = UDim2.new(0, 12, 1, -52), Size = UDim2.new(1, -24, 0, 22), Font = Font.GothamBlack, Text = LP.DisplayName, TextSize = 17, TextColor3 = T.Text, TextTruncate = Enum.TextTruncate.AtEnd})
+        Lbl(hero, {Position = UDim2.new(0, 12, 1, -30), Size = UDim2.new(1, -80, 0, 16), Text = "@" .. LP.Name, TextTruncate = Enum.TextTruncate.AtEnd})
+        local dot = New("Frame", {AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -52, 1, -22), Size = UDim2.fromOffset(7, 7), BackgroundColor3 = Color3.fromRGB(70, 220, 120), BorderSizePixel = 0, ZIndex = 5, Parent = hero})
+        Corner(dot, 999)
+        Lbl(hero, {AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -10, 1, -22), Size = UDim2.fromOffset(38, 14), Font = Font.GothamBold, Text = "ONLINE", TextSize = 9, TextColor3 = Color3.fromRGB(70, 220, 120), TextXAlignment = Right})
+
+        local model, center, dist, yaw = nil, Vector3.new(0, 2.5, 0), 9, math.pi
+        local function setModel(m)
+            if model then model:Destroy() model = nil end
+            if not m then return end
+            for _, d in ipairs(m:GetDescendants()) do
+                if d:IsA("BaseScript") or d:IsA("Sound") or d:IsA("Humanoid") or d:GetAttribute("VOXFx") then
+                    d:Destroy()
+                elseif d:IsA("Motor6D") then
+                    pcall(function() d.Transform = CFrame.new() end)
+                end
+            end
+            pcall(function() m:PivotTo(CFrame.new(0, 0, 0)) end)
+            m.Parent = vp
+            model = m
+            pcall(function()
+                local cf, sz = m:GetBoundingBox()
+                center = cf.Position
+                dist = math.clamp(sz.Y * 1.45 + 1.8, 6, 22)
+            end)
+        end
+        local refreshing = false
+        local function refreshAvatar()
+            if refreshing then return end
+            refreshing = true
+            task.spawn(function()
+                local done = false
+                local h = myHum()
+                if h then
+                    local okD, d = pcall(function() return h:GetAppliedDescription() end)
+                    if okD and d then
+                        local okR, rig = pcall(function() return Players:CreateHumanoidModelFromDescription(d, h.RigType) end)
+                        if okR and rig then setModel(rig) done = true end
+                    end
+                end
+                if not done and LP.Character then
+                    local ok, cl = pcall(function()
+                        local c = LP.Character
+                        local was = c.Archivable
+                        c.Archivable = true
+                        local m = c:Clone()
+                        c.Archivable = was
+                        return m
+                    end)
+                    if ok and cl then setModel(cl) end
+                end
+                refreshing = false
+            end)
+        end
+        task.delay(2.2, refreshAvatar)
+        WConn(LP.CharacterAdded, function() task.delay(3, refreshAvatar) end)
+
+        -- ===== stats =====
+        local col = New("Frame", {Position = UDim2.new(0.41, 4, 0, 2), Size = UDim2.new(0.59, -6, 1, -6), BackgroundTransparency = 1, ZIndex = 4, Parent = page})
+        New("UIListLayout", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = col})
+        local function StatCard(title, order, hSize)
+            local card = Glass(col, {LayoutOrder = order, Size = UDim2.new(1, 0, hSize, -4)})
+            Lbl(card, {Position = UDim2.fromOffset(14, 10), Size = UDim2.fromOffset(120, 14), Font = Font.GothamBold, Text = title, TextSize = 11})
+            local val = Lbl(card, {Position = UDim2.fromOffset(14, 26), Size = UDim2.fromOffset(120, 36), Font = Font.GothamBlack, Text = "--", TextSize = 30, TextColor3 = T.Text})
+            local status = Lbl(card, {Position = UDim2.new(0, 14, 1, -26), Size = UDim2.fromOffset(140, 16), Font = Font.GothamBold, Text = "", TextSize = 11})
+            local sp = New("Frame", {AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0), Size = UDim2.new(0.4, 0, 0.62, 0), BackgroundTransparency = 1, ZIndex = 5, Parent = card})
+            local bars = {}
+            for i = 1, 16 do
+                local bar = New("Frame", {AnchorPoint = Vector2.new(0, 1), Position = UDim2.new((i - 1) / 16, 0, 1, 0), Size = UDim2.new(1 / 16, -2, 0.06, 0), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.4, BorderSizePixel = 0, ZIndex = 5, Parent = sp})
+                Corner(bar, 2)
+                bars[i] = bar
+            end
+            return {val = val, status = status, bars = bars}
+        end
+        local pingC = StatCard("PING", 1, 0.34)
+        local fpsC = StatCard("FPS", 2, 0.34)
+        local srv = Glass(col, {LayoutOrder = 3, Size = UDim2.new(1, 0, 0.32, -4)})
+        Lbl(srv, {Position = UDim2.fromOffset(14, 10), Size = UDim2.fromOffset(120, 14), Font = Font.GothamBold, Text = "SERVER", TextSize = 11})
+        local plrs = Lbl(srv, {Position = UDim2.new(0, 14, 0, 28), Size = UDim2.new(0.5, -14, 0, 26), Font = Font.GothamBlack, Text = "-", TextSize = 20, TextColor3 = T.Text})
+        Lbl(srv, {Position = UDim2.new(0, 14, 0, 54), Size = UDim2.new(0.5, -14, 0, 14), Font = Font.GothamBold, Text = "PLAYERS", TextSize = 10})
+        local sess = Lbl(srv, {Position = UDim2.new(0.5, 0, 0, 28), Size = UDim2.new(0.5, -14, 0, 26), Font = Font.GothamBlack, Text = "00:00", TextSize = 20, TextColor3 = T.Text})
+        Lbl(srv, {Position = UDim2.new(0.5, 0, 0, 54), Size = UDim2.new(0.5, -14, 0, 14), Font = Font.GothamBold, Text = "SESSION", TextSize = 10})
+
+        local GREEN, LIME, AMBER, RED = Color3.fromRGB(80, 225, 135), Color3.fromRGB(170, 225, 90), Color3.fromRGB(245, 190, 60), Color3.fromRGB(240, 90, 80)
+        local function quality(v, goodLow, a, b2, c2)
+            -- goodLow = true: smaller is better (ping)
+            local rank
+            if goodLow then rank = v < a and 1 or (v < b2 and 2 or (v < c2 and 3 or 4))
+            else rank = v >= a and 1 or (v >= b2 and 2 or (v >= c2 and 3 or 4)) end
+            return ({GREEN, LIME, AMBER, RED})[rank], ({"Excellent", "Good", "Fair", "Poor"})[rank]
+        end
+        local pingH, fpsH = {}, {}
+        local function paint(card, hist, maxV)
+            for i = 1, 16 do
+                local v = hist[#hist - 16 + i]
+                card.bars[i].Size = UDim2.new(1 / 16, -2, v and math.clamp(v / maxV, 0.06, 1) or 0.06, 0)
+            end
+        end
+        local acc2, frames, seenDirty = 0, 0, nil
+        WConn(RS.RenderStepped, function(dt)
+            frames = frames + 1
+            acc2 = acc2 + dt
+            -- slow turntable
+            if model and page.Visible and Window.Visible then
+                yaw = yaw + dt * 0.55
+                cam.CFrame = CFrame.lookAt(center + Vector3.new(math.sin(yaw) * dist, 0.4, math.cos(yaw) * dist), center)
+            end
+            if acc2 < 0.5 then return end
+            local fps = math.floor(frames / acc2 + 0.5)
+            acc2, frames = 0, 0
+            if not (page.Visible and Window.Visible) then return end
+            local ms
+            pcall(function() ms = math.floor(LP:GetNetworkPing() * 1000 + 0.5) end)
+            if ms then
+                local c, txt = quality(ms, true, 70, 130, 220)
+                pingC.val.Text, pingC.val.TextColor3 = tostring(ms), c
+                pingC.status.Text, pingC.status.TextColor3 = "ms  -  " .. txt, c
+                table.insert(pingH, ms)
+                if #pingH > 16 then table.remove(pingH, 1) end
+                paint(pingC, pingH, 300)
+            end
+            local c2, txt2 = quality(fps, false, 55, 40, 25)
+            fpsC.val.Text, fpsC.val.TextColor3 = tostring(fps), c2
+            fpsC.status.Text, fpsC.status.TextColor3 = "frames/s  -  " .. txt2, c2
+            table.insert(fpsH, fps)
+            if #fpsH > 16 then table.remove(fpsH, 1) end
+            paint(fpsC, fpsH, 120)
+            local up = math.floor(os.clock() - startClock)
+            sess.Text = string.format("%02d:%02d", math.floor(up / 60), up % 60)
+            plrs.Text = #Players:GetPlayers() .. " / " .. Players.MaxPlayers
+            if Skin.Dirty and Skin.Dirty ~= seenDirty and os.clock() - Skin.Dirty > 2 then
+                seenDirty = Skin.Dirty
+                refreshAvatar()
+            end
+        end)
+        if Window.SetSceneDim then Window:SetSceneDim(0) end
+    end
+
+    -- ======================================================
+    -- Device adaption: the window keeps its size on every device, only the floating buttons get
+    -- smaller on a phone (cfg.PhoneFloatScale, default 0.85). cfg.AutoScale = false turns it off.
+    -- ======================================================
+    function Window:ApplyDevice(instant)
+        local vp = Gui.AbsoluteSize
+        local dev = "PC"
+        if UIS.TouchEnabled and not UIS.KeyboardEnabled then
+            dev = (math.min(vp.X, vp.Y) < 600) and "Phone" or "Tablet"
+        end
+        Window.Device = dev
+        local auto = Window.AutoScale
+        -- the window ALWAYS keeps its normal size (small screen or not); only the "UI Scale" slider changes it
+        local sc = math.max(Window.ScaleMul or 1, 0.4)
+        if instant then DevScale.Scale = sc else Tween(DevScale, 0.3, {Scale = sc}) end
+        -- floating buttons are the only thing that gets smaller on a phone
+        Window.FloatDev = (auto and dev == "Phone") and (cfg.PhoneFloatScale or 0.85) or 1
+        for _, fl in pairs(Window.Floats) do pcall(fl.Rescale, fl) end
+        if Window.PerfManual ~= nil then Window.Perf = Window.PerfManual else Window.Perf = (dev == "Phone") end
+        -- keep the tab selector exactly on its tab button
+        if Window.Active then
+            task.delay(0.4, function() pcall(moveSelector, Window.Active, true) end)
+        end
+    end
+    local devToken = 0
+    WConn(Gui:GetPropertyChangedSignal("AbsoluteSize"), function()
+        devToken = devToken + 1
+        local my = devToken
+        task.delay(0.3, function() if my == devToken then Window:ApplyDevice() end end)
+    end)
+    Window:ApplyDevice(true)
 
     -- put back the saved window state and the saved skin
     task.delay(1.0, function()
@@ -3797,4 +4349,41 @@ function Library:Intro(c)
     finished.Event:Wait()
 end
 
-return Library
+-- ======================================================
+-- Safety net: no function of the library can throw into your script.
+-- Any error is printed with warn() and the call returns a harmless "null" object,
+-- so the rest of your script keeps running (and keeps building the UI).
+-- ======================================================
+local Null = {}
+setmetatable(Null, {__index = function() return function() return Null end end, __call = function() return Null end})
+Library.Null = Null
+local safeSeen = setmetatable({}, {__mode = "k"})
+local function Safe(obj)
+    if type(obj) ~= "table" or obj == Null or safeSeen[obj] then return obj end
+    safeSeen[obj] = true
+    for k, v in pairs(obj) do
+        if type(v) == "function" then
+            obj[k] = function(...)
+                local r = table.pack(pcall(v, ...))
+                if r[1] then
+                    for i = 2, r.n do
+                        if type(r[i]) == "table" then Safe(r[i]) end
+                    end
+                    return table.unpack(r, 2, r.n)
+                end
+                warn("[VOX HUB] " .. tostring(k) .. ": " .. tostring(r[2]))
+                return Null
+            end
+        end
+    end
+    return obj
+end
+local __lib = Safe(Library)
+pcall(function() local g = (getgenv and getgenv()) or _G g.VOX_HUB = __lib end)
+return __lib
+end)
+if __vox_ok and __vox_res then return __vox_res end
+warn("[VOX HUB] could not start: " .. tostring(__vox_res))
+local NullLib = {}
+setmetatable(NullLib, {__index = function() return function() return NullLib end end, __call = function() return NullLib end})
+return NullLib
